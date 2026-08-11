@@ -1,0 +1,48 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>net.czqu.rmtt</groupId>
+        <artifactId>rmtt-java-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+    <artifactId>rmtt-core</artifactId>
+    <name>rmtt-core</name>
+    <description>Netty-free shared protocol model + wire codec + app APIs</description>
+
+    <dependencies>
+        <!-- Optional logging backends for net.czqu.rmtt.logging auto-discovery. Both are optional:
+             applications bring their own (or none) and the abstraction falls back to JUL. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.36</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>2.24.1</version>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Test-only bindings used by the LoggingVerifier to exercise the real SLF4J / Log4j2 backends. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>1.7.32</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.24.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,27 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>net.czqu.rmtt</groupId>
+        <artifactId>rmtt-java-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+    <artifactId>rmtt-codec-netty</artifactId>
+    <name>rmtt-codec-netty</name>
+    <description>Netty adapters of the RMTT byte readers/writers plus the decoder/encoder pipeline.</description>
+    <dependencies>
+        <dependency>
+            <groupId>net.czqu.rmtt</groupId>
+            <artifactId>rmtt-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

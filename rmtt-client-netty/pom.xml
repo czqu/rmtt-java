@@ -1,0 +1,58 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>net.czqu.rmtt</groupId>
+        <artifactId>rmtt-java-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+    <artifactId>rmtt-client-netty</artifactId>
+    <name>rmtt-client-netty</name>
+    <description>Netty-based RMTT client with TCP / WebSocket / KCP transports.</description>
+    <dependencies>
+        <dependency>
+            <groupId>net.czqu.rmtt</groupId>
+            <artifactId>rmtt-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.czqu.rmtt</groupId>
+            <artifactId>rmtt-codec-netty</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.l42111996</groupId>
+            <artifactId>kcp-base</artifactId>
+            <version>1.6.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <profiles>
+        <!-- QUIC transport (netty 4.2 quiche). Optional + gated off with -P!quic. -->
+        <profile>
+            <id>quic</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-codec-classes-quic</artifactId>
+                    <optional>true</optional>
+                </dependency>
+                <dependency>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-codec-native-quic</artifactId>
+                    <classifier>${rmtt.quic.native.classifier}</classifier>
+                    <optional>true</optional>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
+</project>

@@ -1,0 +1,237 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>net.czqu.rmtt</groupId>
+    <artifactId>rmtt-java-parent</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+    <name>rmtt-java-parent</name>
+    <description>RMTT: a lightweight device messaging protocol library for Java. Server and client
+        implementations backed by AIO (JDK NIO.2) and Netty (TCP / WebSocket / KCP / QUIC).</description>
+    <url>https://github.com/rmtt/rmtt-java</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>czqu</id>
+            <name>czqu</name>
+            <url>https://github.com/czqu</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/czqu/rmtt-java.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/czqu/rmtt-java.git</developerConnection>
+        <url>https://github.com/czqu/rmtt-java</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <properties>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+        <maven.compiler.release>8</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <junit.version>5.10.2</junit.version>
+        <!--
+          Quiche native classifier. The QUIC deps in rmtt-server-netty /
+          rmtt-client-netty are marked optional so that consumers who do not use
+          the rmtt-quic transport are completely unaffected: the netty QUIC
+          classes are only loaded (and the native .so only mapped) when a QUIC
+          codec is actually built. Override on unsupported builds via
+          -Drmtt.quic.native.classifier=...
+        -->
+        <rmtt.quic.native.classifier>linux-x86_64</rmtt.quic.native.classifier>
+    </properties>
+
+    <profiles>
+        <!--
+          Build with QUIC support. Active by default so the local build / run.sh
+          exercise the quic transport. Consumers who don't want the extra native
+          dependency run with -P!quic (deps are optional anyway, so simply not
+          using rmt-quic has zero runtime impact on unsupported OSes).
+        -->
+        <profile>
+            <id>quic</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+        </profile>
+
+        <!--
+          Release profile: sign every artifact with GPG (Central Portal requires
+          a detached signature per deployed file). The key and passphrase are
+          resolved from ~/.m2/settings.xml (gpg.keyname / gpg.passphrase), never
+          from the repository.
+        -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>net.czqu.rmtt</groupId>
+                <artifactId>rmtt-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.czqu.rmtt</groupId>
+                <artifactId>rmtt-codec-netty</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.czqu.rmtt</groupId>
+                <artifactId>rmtt-server-netty</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.czqu.rmtt</groupId>
+                <artifactId>rmtt-client-netty</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.czqu.rmtt</groupId>
+                <artifactId>rmtt-codec-aio</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.czqu.rmtt</groupId>
+                <artifactId>rmtt-server-aio</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.czqu.rmtt</groupId>
+                <artifactId>rmtt-client-aio</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>4.2.16.Final</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <modules>
+        <module>rmtt-core</module>
+        <module>rmtt-codec-netty</module>
+        <module>rmtt-server-netty</module>
+        <module>rmtt-client-netty</module>
+        <module>rmtt-codec-aio</module>
+        <module>rmtt-server-aio</module>
+        <module>rmtt-client-aio</module>
+    </modules>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
+
+            <!--
+              Attach a sources jar to every artifact (required by Central Portal).
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--
+              Attach a javadoc jar to every artifact (required by Central Portal).
+              Doclint runs with all checks enabled and warnings are fatal: missing
+              or malformed javadoc fails the build, so published API stays
+              documented. See https://docs.oracle.com/en/java/javase/20/docs/specs/man/javadoc.html
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.6.3</version>
+                <configuration>
+                    <source>8</source>
+                    <encoding>UTF-8</encoding>
+                    <doclint>all</doclint>
+                    <failOnWarnings>true</failOnWarnings>
+                    <failOnError>true</failOnError>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--
+              Publish to Sonatype Central Portal. Requires credentials in
+              ~/.m2/settings.xml under server id "central" (username = token
+              user, password = token value). Run with:
+              mvn deploy -P release
+            -->
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>0.5.0</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <publishingServerId>central</publishingServerId>
+                    <tokenAuth>true</tokenAuth>
+                    <autoPublish>true</autoPublish>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
