@@ -14,7 +14,7 @@ concurrency:
 jobs:
   # ------------------------------------------------------------------
   # Build & verify: compile, package, strict javadoc, run any tests.
-  # Matrix over the minimum supported JDK (8) and the current LTS (21).
+  # Matrix over every mainstream JDK LTS: 8 (minimum supported), 11, 17, 21.
   # ------------------------------------------------------------------
   build:
     name: Build (JDK ${{ matrix.java }})
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java: [8, 21]
+        java: [8, 11, 17, 21]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
