@@ -1,0 +1,53 @@
+name: Release
+
+# Triggered when a GitHub Release is published (Draft new release, tag = v1.0.2 ...).
+# The tag's version overrides the in-pom dev version, signs every artifact with
+# GPG, and publishes to Maven Central via the central-publishing portal.
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Maven Central
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (with Central + GPG credentials)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+          # setup-java writes ~/.m2/settings.xml with the central server and
+          # imports the GPG private key + passphrase automatically.
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+
+      - name: Extract version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"   # v1.0.2 -> 1.0.2
+
+      - name: Set project version from tag
+        run: |
+          mvn -B -ntp versions:set \
+            -DnewVersion=${{ steps.ver.outputs.version }} \
+            -DprocessAllModules=true \
+            -DgenerateBackupPoms=false
+
+      - name: Deploy to Maven Central
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        # tests already run in ci.yml; release only builds + signs + deploys
+        run: mvn -B -ntp deploy -P release -DskipTests -DskipITs
