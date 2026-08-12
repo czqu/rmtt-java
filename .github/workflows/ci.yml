@@ -50,12 +50,11 @@ jobs:
           retention-days: 7
 
   # ------------------------------------------------------------------
-  # JMH benchmark (rmtt-benchmark). Run on every main push and on
-  # manual dispatch; skipped on pull requests to keep PR CI fast.
+  # JMH benchmark (rmtt-benchmark). Runs on every push, PR and manual
+  # dispatch so regressions are caught in pull requests too.
   # ------------------------------------------------------------------
   benchmark:
     name: Benchmark (JMH)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -91,7 +90,6 @@ jobs:
   # ------------------------------------------------------------------
   e2e-go:
     name: E2E (Java server + Go client)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -127,3 +125,91 @@ jobs:
           kill $SERVER_PID 2>/dev/null || true
           cat ../server.log || true
           exit $GO_RC
+
+  # ------------------------------------------------------------------
+  # Reverse cross-language e2e: rmtt-go v1.0.2 server + Java rmtt client.
+  # ------------------------------------------------------------------
+  e2e-go-server:
+    name: E2E (Go server + Java client)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: rmtt-it/go-server/go.mod
+
+      - name: Build it module and classpath
+        run: |
+          # install (not package) so the 1.0.1 artifacts land in ~/.m2 and the
+          # dependency:build-classpath goal can resolve them without -am;
+          # outputFile is resolved against the module basedir -> rmtt-it/cp-it.txt
+          mvn -B -ntp -pl rmtt-it -am -DskipTests install
+          mvn -B -ntp -pl rmtt-it dependency:build-classpath -Dmdep.outputFile=cp-it.txt
+
+      - name: Run Java client against Go server
+        run: |
+          cd rmtt-it/go-server
+          go build -o /tmp/go-server .
+          /tmp/go-server 18998 > server.log 2>&1 &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            grep -q "GO_SERVER_READY" server.log && break
+            sleep 1
+          done
+          grep "GO_SERVER_READY" server.log
+          cd ../..
+          java -cp "rmtt-it/target/classes:$(cat rmtt-it/cp-it.txt)" \
+            net.czqu.rmtt.it.E2eJavaClientMain 127.0.0.1 18998
+          JAVA_RC=$?
+          kill $SERVER_PID 2>/dev/null || true
+          cat rmtt-it/go-server/server.log || true
+          exit $JAVA_RC
+
+  # ------------------------------------------------------------------
+  # Cross-language e2e: Java rmtt server + rmtt-rust client (crates.io rmtt).
+  # ------------------------------------------------------------------
+  e2e-rust:
+    name: E2E (Java server + Rust client)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build server jar
+        run: mvn -B -ntp -pl rmtt-it -am -DskipTests package
+
+      - name: Run Rust client against Java server
+        run: |
+          java -jar rmtt-it/target/rmtt-e2e-server.jar 18999 > server.log 2>&1 &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            grep -q "E2E_SERVER_READY" server.log && break
+            sleep 1
+          done
+          grep "E2E_SERVER_READY" server.log
+          cd rmtt-it/rust-client
+          cargo run --release -- 18999
+          RUST_RC=$?
+          kill $SERVER_PID 2>/dev/null || true
+          cat ../server.log || true
+          exit $RUST_RC
