@@ -161,6 +161,7 @@
         <module>rmtt-server-aio</module>
         <module>rmtt-client-aio</module>
         <module>rmtt-benchmark</module>
+        <module>rmtt-it</module>
     </modules>
 
     <build>
