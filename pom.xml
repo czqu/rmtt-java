@@ -155,6 +155,7 @@
         <module>rmtt-codec-aio</module>
         <module>rmtt-server-aio</module>
         <module>rmtt-client-aio</module>
+        <module>rmtt-benchmark</module>
     </modules>
 
     <build>

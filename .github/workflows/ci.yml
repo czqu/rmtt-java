@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {} # manual trigger, also runs the benchmark job
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------
+  # Build & verify: compile, package, strict javadoc, run any tests.
+  # Matrix over the minimum supported JDK (8) and the current LTS (21).
+  # ------------------------------------------------------------------
+  build:
+    name: Build (JDK ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [8, 21]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      - name: Build and verify
+        run: mvn -B -ntp verify
+
+      - name: Upload build artifacts
+        if: ${{ matrix.java == '21' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmtt-jars
+          path: |
+            */target/*.jar
+            !*/target/*-sources.jar
+            !*/target/*-javadoc.jar
+            !*/target/*-shaded.jar
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # JMH benchmark (rmtt-benchmark). Run on every main push and on
+  # manual dispatch; skipped on pull requests to keep PR CI fast.
+  # ------------------------------------------------------------------
+  benchmark:
+    name: Benchmark (JMH)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Build benchmark jar
+        run: mvn -B -ntp -pl rmtt-benchmark -am -DskipTests package
+
+      - name: Run benchmarks (short profile)
+        run: |
+          java -jar rmtt-benchmark/target/rmtt-benchmarks.jar \
+            -wi 2 -i 3 -f 1 -r 1 -w 1 \
+            -rf text -rff rmtt-benchmark-results.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmtt-benchmark-results
+          path: rmtt-benchmark-results.txt
+          retention-days: 14
