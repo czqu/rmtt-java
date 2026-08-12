@@ -46,3 +46,6 @@ dependency-reduced-pom.xml
 
 ### Go build artifacts ###
 *.exe
+
+### Maven flatten ###
+.flattened-pom.xml
