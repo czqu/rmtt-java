@@ -6,7 +6,7 @@
     <parent>
         <groupId>net.czqu.rmtt</groupId>
         <artifactId>rmtt-java-parent</artifactId>
-        <version>1.0.1</version>
+        <version>${revision}</version>
     </parent>
     <artifactId>rmtt-benchmark</artifactId>
     <name>rmtt-benchmark</name>
