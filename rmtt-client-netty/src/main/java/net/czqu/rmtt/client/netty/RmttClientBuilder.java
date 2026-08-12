@@ -96,8 +96,8 @@ public final class RmttClientBuilder {
      * Incompatible with {@link #keepAliveSeconds(int)}. The negotiated server_kp from CONNACK caps
      * the probing ceiling.
      *
-     * @param shortSeconds preset short heartbeat period used for initial liveness probes (>=1)
-     * @param maxSeconds   upper bound of the adaptive range (>= shortSeconds)
+     * @param shortSeconds preset short heartbeat period used for initial liveness probes (&gt;=1)
+     * @param maxSeconds   upper bound of the adaptive range (&gt;= shortSeconds)
      * @return this builder
      */
     public RmttClientBuilder adaptiveHeartbeat(int shortSeconds, int maxSeconds) {

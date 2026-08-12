@@ -97,12 +97,12 @@ public final class AdaptiveHeartbeat {
     /**
      * Create the state machine bound to a live connection.
      *
-     * @param shortSeconds        preset short heartbeat period (>=1s)
-     * @param maxSeconds          configured adaptive max (>= shortSeconds)
+     * @param shortSeconds        preset short heartbeat period (&gt;=1s)
+     * @param maxSeconds          configured adaptive max (&gt;= shortSeconds)
      * @param serverKp            negotiated server_kp from CONNACK (0 = keepalive disabled)
-     * @param probeCount          consecutive short-heartbeat successes before probing (>=1)
+     * @param probeCount          consecutive short-heartbeat successes before probing (&gt;=1)
      * @param responseWindowMillis window to wait for a PINGRESP before counting a probe as failed
-     * @param fineStepSeconds     nudge step used in PROBE_FINE (>=1s)
+     * @param fineStepSeconds     nudge step used in PROBE_FINE (&gt;=1s)
      * @param transport           live connection
      */
     public AdaptiveHeartbeat(int shortSeconds, int maxSeconds, int serverKp,

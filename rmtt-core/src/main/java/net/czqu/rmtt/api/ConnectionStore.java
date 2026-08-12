@@ -4,7 +4,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * In-memory route table mapping {@code device_id -> connection}. Transport-agnostic; both stacks
+ * In-memory route table mapping {@code device_id -&gt; connection}. Transport-agnostic; both stacks
  * store their own {@link DeviceConnection} here.
  */
 public final class ConnectionStore {
