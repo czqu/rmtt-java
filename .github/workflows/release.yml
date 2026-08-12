@@ -37,17 +37,12 @@ jobs:
         id: ver
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"   # v1.0.2 -> 1.0.2
 
-      - name: Set project version from tag
-        run: |
-          mvn -B -ntp versions:set \
-            -DnewVersion=${{ steps.ver.outputs.version }} \
-            -DprocessAllModules=true \
-            -DgenerateBackupPoms=false
-
       - name: Deploy to Maven Central
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        # tests already run in ci.yml; release only builds + signs + deploys
-        run: mvn -B -ntp deploy -P release -DskipTests -DskipITs
+        # CI-Friendly version: -Drevision overrides ${revision} in every pom;
+        # flatten-maven-plugin writes the resolved version into deployed POMs.
+        # Tests already run in ci.yml; release only builds + signs + deploys.
+        run: mvn -B -ntp deploy -P release -DskipTests -DskipITs -Drevision=${{ steps.ver.outputs.version }}

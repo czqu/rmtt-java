@@ -4,7 +4,7 @@
     <parent>
         <groupId>net.czqu.rmtt</groupId>
         <artifactId>rmtt-java-parent</artifactId>
-        <version>1.0.1</version>
+        <version>${revision}</version>
     </parent>
     <artifactId>rmtt-codec-aio</artifactId>
     <name>rmtt-codec-aio</name>
