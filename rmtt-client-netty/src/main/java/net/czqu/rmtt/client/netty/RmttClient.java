@@ -103,6 +103,7 @@ public class RmttClient {
     private kcp.KcpClient kcpClient;
     private Channel kcpDummy;
     private final AtomicBoolean reconnectScheduled = new AtomicBoolean();
+    private ReconnectBackoff reconnectBackoff;
 
     RmttClient(String host,
                int port,
@@ -537,12 +538,14 @@ public class RmttClient {
     }
 
     private void scheduleReconnect() {
-        ReconnectBackoff backoff = new ReconnectBackoff(reconnectBaseMillis, maxReconnectIntervalMillis, reconnectJitter);
+        if (reconnectBackoff == null) {
+            reconnectBackoff = new ReconnectBackoff(reconnectBaseMillis, maxReconnectIntervalMillis, reconnectJitter);
+        }
         scheduler.execute(() -> {
             if (closed.get() || manuallyDisconnecting) {
                 return;
             }
-            long delay = backoff.nextDelayMillis();
+            long delay = reconnectBackoff.nextDelayMillis();
             scheduler.schedule(this::reconnectAttempt, delay, TimeUnit.MILLISECONDS);
         });
     }
@@ -554,6 +557,9 @@ public class RmttClient {
         try {
             handshakeFuture = new CompletableFuture<>();
             connectOnce();
+            if (reconnectBackoff != null) {
+                reconnectBackoff.reset();
+            }
         } catch (Exception e) {
             if (connectRetry) {
                 scheduleReconnect();

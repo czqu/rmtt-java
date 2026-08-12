@@ -33,3 +33,11 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### WorkBuddy ###
+.workbuddy/
+
+### Scratch / generated classpath dumps ###
+cp-client.txt
+cp-server.txt
+/.idea/

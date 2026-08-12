@@ -3,12 +3,12 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>net.czqu.rmtt</groupId>
     <artifactId>rmtt-java-parent</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <packaging>pom</packaging>
     <name>rmtt-java-parent</name>
     <description>RMTT: a lightweight device messaging protocol library for Java. Server and client
         implementations backed by AIO (JDK NIO.2) and Netty (TCP / WebSocket / KCP / QUIC).</description>
-    <url>https://github.com/rmtt/rmtt-java</url>
+    <url>https://github.com/czqu/rmtt-java</url>
 
     <licenses>
         <license>

@@ -66,6 +66,7 @@ public final class RmttClient {
     private volatile boolean manuallyDisconnecting;
     private ScheduledExecutorService scheduler;
     private ScheduledFuture<?> adaptiveTick;
+    private ReconnectBackoff reconnectBackoff;
 
     RmttClient(String host,
                int port,
@@ -292,12 +293,14 @@ public final class RmttClient {
     }
 
     private void scheduleReconnect() {
-        ReconnectBackoff backoff = new ReconnectBackoff(reconnectBaseMillis, maxReconnectIntervalMillis, reconnectJitter);
+        if (reconnectBackoff == null) {
+            reconnectBackoff = new ReconnectBackoff(reconnectBaseMillis, maxReconnectIntervalMillis, reconnectJitter);
+        }
         scheduler.execute(() -> {
             if (closed.get() || manuallyDisconnecting) {
                 return;
             }
-            long delay = backoff.nextDelayMillis();
+            long delay = reconnectBackoff.nextDelayMillis();
             scheduler.schedule(this::reconnectAttempt, delay, TimeUnit.MILLISECONDS);
         });
     }
@@ -308,6 +311,9 @@ public final class RmttClient {
         }
         try {
             connectOnce();
+            if (reconnectBackoff != null) {
+                reconnectBackoff.reset();
+            }
         } catch (Exception e) {
             if (connectRetry && !closed.get()) {
                 scheduleReconnect();

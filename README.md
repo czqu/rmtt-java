@@ -46,13 +46,13 @@ All artifacts are published to Maven Central under `net.czqu.rmtt`:
 <dependency>
     <groupId>net.czqu.rmtt</groupId>
     <artifactId>rmtt-server-netty</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 </dependency>
 
 <dependency>
     <groupId>net.czqu.rmtt</groupId>
     <artifactId>rmtt-client-netty</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 </dependency>
 ```
 

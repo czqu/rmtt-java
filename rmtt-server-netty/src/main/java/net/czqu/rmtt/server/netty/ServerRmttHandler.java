@@ -24,6 +24,7 @@ import net.czqu.rmtt.protocol.RmttWireCodec.ProtocolViolation;
 import net.czqu.rmtt.protocol.ServerKeepalivePolicy;
 
 import java.util.Optional;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import net.czqu.rmtt.logging.InternalLogger;
@@ -41,6 +42,7 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
     static final AttributeKey<NettyDeviceConnection> CONNECTION_KEY = AttributeKey.valueOf("rmtt.connection");
     static final AttributeKey<Long> LAST_READ_KEY = AttributeKey.valueOf("rmtt.lastRead");
     static final AttributeKey<Long> SERVER_KP_KEY = AttributeKey.valueOf("rmtt.serverKp");
+    static final AttributeKey<ScheduledFuture<?>> REAPER_KEY = AttributeKey.valueOf("rmtt.reaper");
 
     private final ConnectionStore connectionStore;
     private final Authenticator authenticator;
@@ -138,7 +140,7 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
         if (serverKp <= 0) {
             return; // server_kp==0: keepalive-based liveness disabled
         }
-        ctx.executor().scheduleAtFixedRate(() -> {
+        ScheduledFuture<?> reaper = ctx.executor().scheduleAtFixedRate(() -> {
             if (!ctx.channel().isActive()) {
                 return;
             }
@@ -157,6 +159,7 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
                 unregisterAndNotify(ctx, "keepalive timeout");
             }
         }, serverKp * 1500, serverKp * 1500, TimeUnit.MILLISECONDS);
+        ctx.channel().attr(REAPER_KEY).set(reaper);
     }
 
     private void handlePush(ChannelHandlerContext ctx, RmttMessage msg) {
@@ -169,6 +172,10 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
+        ScheduledFuture<?> reaper = ctx.channel().attr(REAPER_KEY).getAndSet(null);
+        if (reaper != null) {
+            reaper.cancel(false);
+        }
         unregisterAndNotify(ctx, "connection closed");
     }
 

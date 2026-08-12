@@ -4,7 +4,7 @@
     <parent>
         <groupId>net.czqu.rmtt</groupId>
         <artifactId>rmtt-java-parent</artifactId>
-        <version>1.0.0</version>
+        <version>1.0.1</version>
     </parent>
     <artifactId>rmtt-server-aio</artifactId>
     <name>rmtt-server-aio</name>

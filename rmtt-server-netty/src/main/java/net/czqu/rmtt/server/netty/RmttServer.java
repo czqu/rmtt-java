@@ -221,6 +221,10 @@ public class RmttServer {
      * @return the push outcome
      */
     public PushResult push(String deviceId, byte[] payload) {
+        if (payload == null) {
+            LOG.warn("push rejected: null payload for device={}", deviceId);
+            return REJECTED;
+        }
         return connectionStore.get(deviceId)
                 .map(conn -> {
                     if (!conn.isActive()) {
