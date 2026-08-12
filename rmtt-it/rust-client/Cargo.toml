@@ -1,0 +1,7 @@
+[package]
+name = "rmtt-rust-e2e"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rmtt = "0.1.0"

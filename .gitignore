@@ -43,3 +43,6 @@ cp-server.txt
 /.idea/
 ### Maven shade ###
 dependency-reduced-pom.xml
+
+### Go build artifacts ###
+*.exe

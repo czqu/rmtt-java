@@ -128,7 +128,11 @@ public final class RmttWireCodec {
             }
             case PUSH: {
                 int reserve = in.readUnsignedByte();
-                byte[] payload = in.readBytes(in.readableBytes());
+                // consume exactly the frame-declared payload length: the reader may hold
+                // additional concatenated frames, so reading readableBytes() would swallow
+                // the next packets into this payload
+                int payloadLen = header.remainingLength() - 1;
+                byte[] payload = payloadLen > 0 ? in.readBytes(payloadLen) : new byte[0];
                 return new PushMessage(header, new PushVariableHeader((byte) reserve), payload);
             }
             case DISCONNECT: {

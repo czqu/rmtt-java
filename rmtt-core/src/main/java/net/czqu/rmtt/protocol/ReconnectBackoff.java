@@ -16,8 +16,8 @@ public final class ReconnectBackoff {
     /**
      * Create a backoff schedule starting at the first attempt.
      *
-     * @param baseMillis base delay for the first attempt (>=1, clamped)
-     * @param maxMillis  upper cap for the delay (>= baseMillis, clamped)
+     * @param baseMillis base delay for the first attempt (&gt;=1, clamped)
+     * @param maxMillis  upper cap for the delay (&gt;= baseMillis, clamped)
      * @param jitter     uniform jitter fraction in [0,1); 0 disables jitter
      */
     public ReconnectBackoff(long baseMillis, long maxMillis, float jitter) {

@@ -8,7 +8,7 @@ import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import java.util.List;
 
 /**
- * Outbound converter: {@code ByteBuf} (already encoded by {@code RmttEncoder}) -> binary
+ * Outbound converter: {@code ByteBuf} (already encoded by {@code RmttEncoder}) -&gt; binary
  * {@link BinaryWebSocketFrame}. One RMTT packet becomes exactly one WebSocket binary frame.
  */
 public class ByteBufToWsFrame extends MessageToMessageEncoder<ByteBuf> {

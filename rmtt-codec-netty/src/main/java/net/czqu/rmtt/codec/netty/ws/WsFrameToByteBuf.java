@@ -11,7 +11,7 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import java.util.List;
 
 /**
- * Inbound converter: binary {@link WebSocketFrame} -> {@code ByteBuf} so the stream-based
+ * Inbound converter: binary {@link WebSocketFrame} -&gt; {@code ByteBuf} so the stream-based
  * {@code RmttDecoder} can be reused. One WebSocket binary frame carries exactly one RMTT packet.
  */
 public class WsFrameToByteBuf extends MessageToMessageDecoder<WebSocketFrame> {

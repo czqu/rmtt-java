@@ -36,7 +36,12 @@
     <properties>
         <maven.compiler.source>1.8</maven.compiler.source>
         <maven.compiler.target>1.8</maven.compiler.target>
-        <maven.compiler.release>8</maven.compiler.release>
+        <!--
+          No maven.compiler.release here: maven-javadoc-plugin forwards that
+          property as a release flag to javadoc, which JDK 8 does not support
+          (invalid flag). Compile with source/target 1.8 instead; javadoc runs
+          with -source 8, valid on both JDK 8 and JDK 21.
+        -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <junit.version>5.10.2</junit.version>
@@ -156,6 +161,7 @@
         <module>rmtt-server-aio</module>
         <module>rmtt-client-aio</module>
         <module>rmtt-benchmark</module>
+        <module>rmtt-it</module>
     </modules>
 
     <build>
