@@ -13,6 +13,7 @@ import net.czqu.rmtt.protocol.FixedHeader;
 import net.czqu.rmtt.protocol.RmttMessage;
 import net.czqu.rmtt.protocol.RmttMessageFactory;
 import net.czqu.rmtt.protocol.RmttMessageType;
+import net.czqu.rmtt.protocol.RmttProtocol;
 import net.czqu.rmtt.protocol.RmttWireCodec;
 import net.czqu.rmtt.protocol.ServerKeepalivePolicy;
 import net.czqu.rmtt.logging.InternalLogger;
@@ -104,6 +105,13 @@ public final class AioServerSession implements AioFrameHandler {
 
     private void handleConnect(ConnectMessage msg) {
         String credential = msg.connectPayload().credential();
+        if (credential != null && credential.length() > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
+            LOG.warn("CONNECT rejected: credential too long ({} > max {})", credential.length(),
+                    RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+            writeConnAck(ConnectReturnCode.CONNECT_UNAUTHORIZED, 0);
+            conn.close();
+            return;
+        }
         AuthResult authResult;
         try {
             authResult = authenticator.authenticate(credential);
@@ -126,13 +134,15 @@ public final class AioServerSession implements AioFrameHandler {
         this.serverKp = kp;
         this.connection = new AioDeviceConnection(conn);
         this.deviceId = authResult.deviceId();
+        // Send CONNACK before registering so a push cannot target the client
+        // before it finishes the handshake (matches rmtt-go ordering).
+        writeConnAck(ConnectReturnCode.CONNECT_ACCEPTED, kp);
         Optional<net.czqu.rmtt.api.DeviceConnection> previous = connectionStore.register(deviceId, connection);
         previous.ifPresent(old -> {
             if (old.isActive()) {
                 old.sendDisconnect(DisconnectReturnCode.SESSION_TAKEN_OVER);
             }
         });
-        writeConnAck(ConnectReturnCode.CONNECT_ACCEPTED, kp);
         connectionListener.onConnectionEstablished(deviceId);
         LOG.info("device {} connected via aio (proposal={}s serverKp={}s)",
                 deviceId, msg.variableHeader().keepAliveTimeSeconds(), kp);
