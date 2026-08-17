@@ -18,6 +18,7 @@ import net.czqu.rmtt.protocol.FixedHeader;
 import net.czqu.rmtt.protocol.RmttMessage;
 import net.czqu.rmtt.protocol.RmttMessageFactory;
 import net.czqu.rmtt.protocol.RmttMessageType;
+import net.czqu.rmtt.protocol.RmttProtocol;
 import net.czqu.rmtt.protocol.RmttWireCodec.MagicNumberViolation;
 import net.czqu.rmtt.protocol.RmttWireCodec.BadProtocolVersionViolation;
 import net.czqu.rmtt.protocol.RmttWireCodec.ProtocolViolation;
@@ -96,6 +97,13 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
     private void handleConnect(ChannelHandlerContext ctx, RmttMessage msg) {
         String credential = msg instanceof ConnectMessage
                 ? ((ConnectMessage) msg).connectPayload().credential() : null;
+        if (credential != null && credential.length() > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
+            LOG.warn("CONNECT rejected: credential too long ({} > max {})", credential.length(),
+                    RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+            ctx.writeAndFlush(connAck(ConnectReturnCode.CONNECT_UNAUTHORIZED, 0))
+                    .addListener(ChannelFutureListener.CLOSE);
+            return;
+        }
         AuthResult authResult;
         try {
             authResult = authenticator.authenticate(credential);
@@ -120,6 +128,10 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
         NettyDeviceConnection conn = new NettyDeviceConnection(ctx.channel());
         ctx.channel().attr(CONNECTION_KEY).set(conn);
         ctx.channel().attr(SERVER_KP_KEY).set(kp);
+        // Send CONNACK BEFORE making the connection visible to the store, so a
+        // downstream push cannot target the client before it has finished the
+        // handshake (matches the rmtt-go server ordering).
+        ctx.writeAndFlush(connAck(ConnectReturnCode.CONNECT_ACCEPTED, (int) kp));
         Optional<DeviceConnection> previous = connectionStore.register(deviceId, conn);
         previous.ifPresent(old -> {
             if (old.isActive()) {
@@ -128,7 +140,6 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
         });
         ctx.channel().attr(DEVICE_ID_KEY).set(deviceId);
         scheduleIdleReaper(ctx, kp);
-        ctx.writeAndFlush(connAck(ConnectReturnCode.CONNECT_ACCEPTED, (int) kp));
         connectionListener.onConnectionEstablished(deviceId);
         LOG.info("device {} connected (proposal={}s serverKp={}s)", deviceId,
                 msg instanceof ConnectMessage

@@ -177,6 +177,13 @@ final class KcpServerSession implements KcpListener {
 
     private void handleConnect(Session s, ConnectMessage msg) {
         String credential = msg.connectPayload().credential();
+        if (credential != null && credential.length() > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
+            LOG.warn("CONNECT rejected: credential too long ({} > max {})", credential.length(),
+                    RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+            send(s.ukcp, connAck(ConnectReturnCode.CONNECT_UNAUTHORIZED, 0));
+            closeSoon(s.ukcp);
+            return;
+        }
         AuthResult authResult;
         try {
             authResult = authenticator.authenticate(credential);
@@ -199,13 +206,15 @@ final class KcpServerSession implements KcpListener {
         s.conn = conn;
         s.serverKp = kp;
         s.deviceId = deviceId;
+        // Send CONNACK before registering so a push cannot target the client
+        // before it finishes the handshake (matches rmtt-go ordering).
+        send(s.ukcp, connAck(ConnectReturnCode.CONNECT_ACCEPTED, (int) kp));
         Optional<DeviceConnection> previous = connectionStore.register(deviceId, conn);
         previous.ifPresent(old -> {
             if (old.isActive()) {
                 old.sendDisconnect(DisconnectReturnCode.SESSION_TAKEN_OVER);
             }
         });
-        send(s.ukcp, connAck(ConnectReturnCode.CONNECT_ACCEPTED, (int) kp));
         connectionListener.onConnectionEstablished(deviceId);
         LOG.info("device {} connected via kcp (proposal={}s serverKp={}s)",
                 deviceId, msg.variableHeader().keepAliveTimeSeconds(), kp);
