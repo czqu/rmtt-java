@@ -7,6 +7,7 @@ import kcp.Ukcp;
 import net.czqu.rmtt.api.AuthResult;
 import net.czqu.rmtt.api.Authenticator;
 import net.czqu.rmtt.api.ConnectionListener;
+import net.czqu.rmtt.api.ConnectionLimiter;
 import net.czqu.rmtt.api.ConnectionStore;
 import net.czqu.rmtt.api.DeviceConnection;
 import net.czqu.rmtt.api.RmttMessageHandler;
@@ -52,6 +53,10 @@ final class KcpServerSession implements KcpListener {
     private final ServerKeepalivePolicy keepalivePolicy;
     private final ScheduledExecutorService scheduler;
     private final int maxBytesInMessage;
+    private final ConnectionLimiter limiter;
+
+    /** A session that has not completed CONNECT within this window is reaped. */
+    static final long UNAUTHENTICATED_TIMEOUT_NANOS = 30_000_000_000L;
 
     private final ConcurrentHashMap<Ukcp, Session> sessions = new ConcurrentHashMap<>();
 
@@ -76,6 +81,17 @@ final class KcpServerSession implements KcpListener {
                      ConnectionListener connectionListener,
                      ServerKeepalivePolicy keepalivePolicy,
                      ScheduledExecutorService scheduler) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy,
+                scheduler, new ConnectionLimiter(0));
+    }
+
+    KcpServerSession(ConnectionStore connectionStore,
+                     Authenticator authenticator,
+                     RmttMessageHandler messageHandler,
+                     ConnectionListener connectionListener,
+                     ServerKeepalivePolicy keepalivePolicy,
+                     ScheduledExecutorService scheduler,
+                     ConnectionLimiter limiter) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
@@ -83,6 +99,7 @@ final class KcpServerSession implements KcpListener {
         this.keepalivePolicy = keepalivePolicy;
         this.scheduler = scheduler;
         this.maxBytesInMessage = RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE;
+        this.limiter = limiter;
     }
 
     void startReaper() {
@@ -91,6 +108,11 @@ final class KcpServerSession implements KcpListener {
 
     @Override
     public void onConnected(Ukcp ukcp) {
+        if (!limiter.tryAcquire()) {
+            LOG.warn("session limit {} reached, rejecting kcp session", limiter.maxConnections());
+            ukcp.close();
+            return;
+        }
         sessions.put(ukcp, new Session(ukcp));
     }
 
@@ -98,6 +120,11 @@ final class KcpServerSession implements KcpListener {
     public void handleReceive(ByteBuf data, Ukcp ukcp) {
         Session s = sessions.get(ukcp);
         if (s == null) {
+            if (!limiter.tryAcquire()) {
+                LOG.warn("session limit {} reached, rejecting kcp session", limiter.maxConnections());
+                ukcp.close();
+                return;
+            }
             s = new Session(ukcp);
             sessions.put(ukcp, s);
         }
@@ -114,6 +141,11 @@ final class KcpServerSession implements KcpListener {
                     header = RmttWireCodec.decodeHeader(reader);
                 } catch (Underflow u) {
                     s.pending.resetReaderIndex();
+                    break;
+                } catch (ProtocolViolation pv) {
+                    // hard violation in the header (bad flags / bad varint) is fatal, like on netty
+                    s.pending.resetReaderIndex();
+                    protocolViolation(s, "bad header: " + pv.getMessage());
                     break;
                 }
                 if (header.remainingLength() < 0 || header.remainingLength() > maxBytesInMessage) {
@@ -176,14 +208,23 @@ final class KcpServerSession implements KcpListener {
     }
 
     private void handleConnect(Session s, ConnectMessage msg) {
-        String credential = msg.connectPayload().credential();
-        if (credential != null && credential.length() > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
-            LOG.warn("CONNECT rejected: credential too long ({} > max {})", credential.length(),
+        if (s.deviceId != null) {
+            // one CONNECT per session; a repeat would re-register and self-kick the connection
+            LOG.warn("duplicate CONNECT on established session, closing");
+            send(s.ukcp, RmttMessageFactory.disconnect(DisconnectReturnCode.PROTOCOL_VIOLATION));
+            unregisterAndNotify(s, "duplicate CONNECT");
+            closeSoon(s.ukcp);
+            return;
+        }
+        byte[] rawCredential = msg.payload();
+        if (rawCredential != null && rawCredential.length > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
+            LOG.warn("CONNECT rejected: credential too long ({} > max {})", rawCredential.length,
                     RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
             send(s.ukcp, connAck(ConnectReturnCode.CONNECT_UNAUTHORIZED, 0));
             closeSoon(s.ukcp);
             return;
         }
+        String credential = msg.connectPayload().credential();
         AuthResult authResult;
         try {
             authResult = authenticator.authenticate(credential);
@@ -223,7 +264,17 @@ final class KcpServerSession implements KcpListener {
     private void reap() {
         long now = System.nanoTime();
         for (Session s : sessions.values()) {
-            if (s.serverKp <= 0 || s.deviceId == null || s.conn == null) {
+            if (s.deviceId == null || s.conn == null) {
+                // unauthenticated session: reap after the handshake window so idle or
+                // spoofed sessions cannot accumulate buffers forever
+                if (now - s.lastReadNanos > UNAUTHENTICATED_TIMEOUT_NANOS) {
+                    LOG.warn("reaping unauthenticated kcp session (no CONNECT within {}ms)",
+                            UNAUTHENTICATED_TIMEOUT_NANOS / 1_000_000L);
+                    closeSoon(s.ukcp);
+                }
+                continue;
+            }
+            if (s.serverKp <= 0) {
                 continue;
             }
             if (!s.ukcp.isActive()) {
@@ -294,6 +345,7 @@ final class KcpServerSession implements KcpListener {
         if (s == null) {
             return;
         }
+        limiter.release();
         unregisterAndNotify(s, "connection closed");
         s.pending.release();
     }

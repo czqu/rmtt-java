@@ -4,6 +4,7 @@ import net.czqu.rmtt.api.AuthResult;
 import net.czqu.rmtt.api.Authenticator;
 import net.czqu.rmtt.api.ConnectionListener;
 import net.czqu.rmtt.api.ConnectionStore;
+import net.czqu.rmtt.api.Credentials;
 import net.czqu.rmtt.api.RmttMessageHandler;
 import net.czqu.rmtt.protocol.ConnAckVariableHeader;
 import net.czqu.rmtt.protocol.ConnectMessage;
@@ -40,6 +41,9 @@ public final class AioServerSession implements AioFrameHandler {
     private volatile long serverKp;
     private Runnable closeCallback;
 
+    /** A connection that has not completed CONNECT within this window is closed. */
+    static final long UNAUTHENTICATED_TIMEOUT_MILLIS = 30_000;
+
     AioServerSession(ConnectionStore connectionStore,
                      Authenticator authenticator,
                      RmttMessageHandler messageHandler,
@@ -55,6 +59,11 @@ public final class AioServerSession implements AioFrameHandler {
     /** Effective server-side keepalive for this session (0 = disabled). */
     long serverKp() {
         return serverKp;
+    }
+
+    /** The authenticated device id, or null before the CONNECT handshake completes. */
+    String deviceId() {
+        return deviceId;
     }
 
     void bind(AioConnection conn) {
@@ -104,19 +113,28 @@ public final class AioServerSession implements AioFrameHandler {
     }
 
     private void handleConnect(ConnectMessage msg) {
-        String credential = msg.connectPayload().credential();
-        if (credential != null && credential.length() > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
-            LOG.warn("CONNECT rejected: credential too long ({} > max {})", credential.length(),
+        if (deviceId != null) {
+            // one CONNECT per session; a repeat would re-register and self-kick the connection
+            LOG.warn("duplicate CONNECT on established session, closing");
+            conn.writeFrame(RmttWireCodec.encodeToBytes(
+                    RmttMessageFactory.disconnect(DisconnectReturnCode.PROTOCOL_VIOLATION)));
+            conn.close();
+            return;
+        }
+        byte[] rawCredential = msg.payload();
+        if (rawCredential != null && rawCredential.length > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
+            LOG.warn("CONNECT rejected: credential too long ({} > max {})", rawCredential.length,
                     RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
             writeConnAck(ConnectReturnCode.CONNECT_UNAUTHORIZED, 0);
             conn.close();
             return;
         }
+        String credential = msg.connectPayload().credential();
         AuthResult authResult;
         try {
             authResult = authenticator.authenticate(credential);
         } catch (Exception e) {
-            LOG.error("authenticator failed for credential={}", credential, e);
+            LOG.error("authenticator failed for credential={}", Credentials.mask(credential), e);
             writeConnAck(ConnectReturnCode.CONNECT_SERVER_UNAVAILABLE, 0);
             conn.close();
             return;
@@ -124,7 +142,7 @@ public final class AioServerSession implements AioFrameHandler {
         if (authResult == null || !authResult.allowed()) {
             ConnectReturnCode code = authResult != null ? authResult.returnCode()
                     : ConnectReturnCode.CONNECT_UNAUTHORIZED;
-            LOG.warn("rejecting connect credential={} code={}", credential, code);
+            LOG.warn("rejecting connect credential={} code={}", Credentials.mask(credential), code);
             writeConnAck(code, 0);
             conn.close();
             return;

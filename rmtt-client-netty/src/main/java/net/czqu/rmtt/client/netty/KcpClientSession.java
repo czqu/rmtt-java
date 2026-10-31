@@ -148,7 +148,7 @@ class KcpClientSession implements KcpListener, ClientSession {
                 }
                 break;
             case PINGRESP:
-                LOG.debug("PINGRESP received (credential={})", credential);
+                LOG.debug("PINGRESP received (credential={})", net.czqu.rmtt.api.Credentials.mask(credential));
                 lastReceivedMs = System.currentTimeMillis();
                 break;
             case DISCONNECT:

@@ -74,11 +74,8 @@ public final class RmttWireCodec {
             throw new ProtocolViolation("remaining length exceeds " + RmttCodecUtil.MAX_LENGTH_BYTES + " bytes");
         }
         RmttMessageType type = RmttMessageType.valueOf((byte) (typeAndFlags >> 4));
-        boolean f1 = (typeAndFlags & 0x08) != 0;
-        boolean f2 = (typeAndFlags & 0x04) != 0;
-        boolean f3 = (typeAndFlags & 0x02) != 0;
-        boolean f4 = (typeAndFlags & 0x01) != 0;
-        return new FixedHeader(type, f1, f2, f3, f4, length);
+        // flags are required to be 0 above, so they are always false on the wire
+        return new FixedHeader(type, false, false, false, false, length);
     }
 
     /**
@@ -95,11 +92,32 @@ public final class RmttWireCodec {
      * Decode the variable part + payload for an already-parsed header, continuing from the reader's
      * current position. Used by transports that check frame completion up front.
      *
+     * <p>The declared {@code remainingLength} is enforced: the fields must consume exactly that
+     * many bytes, otherwise the frame is a protocol violation (prevents cross-frame reads and
+     * stream desync on malformed lengths).</p>
+     *
      * @param header the already-parsed fixed header
      * @param in     the read cursor positioned after the fixed header
      * @return the decoded message
      */
     public static RmttMessage decodeBody(FixedHeader header, RmttByteReader in) {
+        int before = in.readableBytes();
+        RmttMessage msg;
+        try {
+            msg = decodeBodyUnchecked(header, in);
+        } catch (Underflow u) {
+            throw new ProtocolViolation("frame truncated: fields exceed declared remaining length "
+                    + header.remainingLength());
+        }
+        int consumed = before - in.readableBytes();
+        if (consumed != header.remainingLength()) {
+            throw new ProtocolViolation("frame length mismatch: declared remaining length "
+                    + header.remainingLength() + " but fields consumed " + consumed);
+        }
+        return msg;
+    }
+
+    private static RmttMessage decodeBodyUnchecked(FixedHeader header, RmttByteReader in) {
         switch (header.messageType()) {
             case CONNECT: {
                 int magic = in.readInt();
@@ -112,9 +130,9 @@ public final class RmttWireCodec {
                 }
                 int reserve = in.readUnsignedByte();
                 int keepalive = in.readUnsignedShort();
-                String credential = in.readString();
-                byte[] payload = credential == null ? null
-                        : credential.getBytes(StandardCharsets.UTF_8);
+                // keep the raw credential bytes; UTF-8 interpretation happens at the business layer
+                int credLen = in.readUnsignedShort();
+                byte[] payload = in.readBytes(credLen);
                 ConnectVariableHeader vh = new ConnectVariableHeader(
                         magic, version, (byte) reserve, keepalive);
                 return new ConnectMessage(header, vh, payload);
@@ -195,9 +213,18 @@ public final class RmttWireCodec {
 
     private static void encodeConnect(ConnectMessage m, RmttByteWriter out) {
         ConnectVariableHeader vh = m.variableHeader();
-        ConnectPayload payload = m.connectPayload();
-        byte[] credential = (payload == null || payload.credential() == null)
-                ? new byte[0] : payload.credential().getBytes(StandardCharsets.UTF_8);
+        // prefer the raw payload bytes so the credential round-trips unchanged
+        byte[] credential;
+        if (m.payload() != null) {
+            credential = m.payload();
+        } else {
+            ConnectPayload payload = m.connectPayload();
+            credential = (payload == null || payload.credential() == null)
+                    ? new byte[0] : payload.credential().getBytes(StandardCharsets.UTF_8);
+        }
+        if (credential.length > 0xFFFF) {
+            throw new IllegalArgumentException("credential too long: " + credential.length + " bytes");
+        }
         int bodyLen = 4 + 1 + 1 + 2 + 2 + credential.length;
         out.writeByte(m.fixedHeader().firstByte());
         RmttCodecUtil.encodeLength(out, bodyLen);

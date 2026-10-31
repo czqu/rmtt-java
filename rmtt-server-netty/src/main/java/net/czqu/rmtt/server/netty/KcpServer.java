@@ -52,6 +52,17 @@ public final class KcpServer {
               ConnectionListener connectionListener,
               ServerKeepalivePolicy keepalivePolicy,
               int port) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy,
+                port, new net.czqu.rmtt.api.ConnectionLimiter(0));
+    }
+
+    KcpServer(ConnectionStore connectionStore,
+              Authenticator authenticator,
+              RmttMessageHandler messageHandler,
+              ConnectionListener connectionListener,
+              ServerKeepalivePolicy keepalivePolicy,
+              int port,
+              net.czqu.rmtt.api.ConnectionLimiter limiter) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
@@ -64,7 +75,7 @@ public final class KcpServer {
             return t;
         });
         this.sessionListener = new KcpServerSession(connectionStore, authenticator, messageHandler,
-                connectionListener, keepalivePolicy, scheduler);
+                connectionListener, keepalivePolicy, scheduler, limiter);
     }
 
     /** Bind the KCP listener (synchronous). */

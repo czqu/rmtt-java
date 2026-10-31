@@ -34,6 +34,9 @@ public final class E2eServerMain {
         final RmttServer[] serverRef = new RmttServer[1];
         RmttServer server = new RmttServerBuilder()
                 .port(port)
+                // TEST-ONLY trust model: any credential is accepted and used as deviceId.
+                // Real deployments MUST validate credentials and derive deviceId from trusted
+                // data - echoing the credential as deviceId allows identity impersonation.
                 .authenticator(credential -> AuthResult.allow(credential))
                 .messageHandler((deviceId, payload) -> {
                     String text = new String(payload, StandardCharsets.UTF_8);

@@ -66,6 +66,7 @@ public final class RmttClient {
     private volatile boolean manuallyDisconnecting;
     private ScheduledExecutorService scheduler;
     private ScheduledFuture<?> adaptiveTick;
+    private ScheduledFuture<?> heartbeatTick;
     private ReconnectBackoff reconnectBackoff;
 
     RmttClient(String host,
@@ -126,7 +127,8 @@ public final class RmttClient {
         }
         scheduler = Executors.newSingleThreadScheduledExecutor();
         LOG.info("connecting {}://{}:{} credential={} keepalive={}s",
-                webSocket ? "ws" : (tls ? "tls" : "tcp"), host, port, credential,
+                webSocket ? "ws" : (tls ? "tls" : "tcp"), host, port,
+                net.czqu.rmtt.api.Credentials.mask(credential),
                 connectKeepaliveProposal());
         return connectOnce();
     }
@@ -187,13 +189,14 @@ public final class RmttClient {
     }
 
     private void scheduleHeartbeat() {
+        stopFixedHeartbeat(); // reconnects schedule a fresh task; never leak the old one
         if (serverKp <= 0) {
             LOG.debug("heartbeat disabled: serverKp={}", serverKp);
             return; // server_kp==0: no PING, no keepalive-based liveness
         }
         long checkMillis = Math.max(500, serverKp * 1000L / 4);
         LOG.info("scheduling fixed heartbeat check every {}ms (serverKp={}s)", checkMillis, serverKp);
-        scheduler.scheduleAtFixedRate(this::heartbeatCheck, checkMillis, checkMillis, TimeUnit.MILLISECONDS);
+        heartbeatTick = scheduler.scheduleAtFixedRate(this::heartbeatCheck, checkMillis, checkMillis, TimeUnit.MILLISECONDS);
     }
 
     /** CONNECT.Keepalive proposal: the max of the adaptive range in adaptive mode. */
@@ -260,6 +263,13 @@ public final class RmttClient {
         }
     }
 
+    private void stopFixedHeartbeat() {
+        if (heartbeatTick != null) {
+            heartbeatTick.cancel(false);
+            heartbeatTick = null;
+        }
+    }
+
     private void heartbeatCheck() {
         AioClientSession s = session;
         if (!connected || s == null || closed.get()) {
@@ -283,6 +293,7 @@ public final class RmttClient {
         }
         connected = false;
         stopAdaptiveHeartbeat();
+        stopFixedHeartbeat();
         LOG.warn("connection lost ({})", reason);
         if (conn != null) {
             conn.close();
@@ -324,6 +335,11 @@ public final class RmttClient {
     private javax.net.ssl.SSLEngine clientEngine() {
         javax.net.ssl.SSLEngine engine = sslContext.createSSLEngine(host, port);
         engine.setUseClientMode(true);
+        // verify the server certificate against the requested host, otherwise any
+        // certificate trusted by the trust store can impersonate the server
+        javax.net.ssl.SSLParameters params = engine.getSSLParameters();
+        params.setEndpointIdentificationAlgorithm("HTTPS");
+        engine.setSSLParameters(params);
         return engine;
     }
 
