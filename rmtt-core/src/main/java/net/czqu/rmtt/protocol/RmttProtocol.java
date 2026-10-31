@@ -9,7 +9,7 @@ public final class RmttProtocol {
     /** Earliest protocol version a server accepts. */
     public static final int PROTOCOL_MIN_VERSION = 1;
     /** Default cap on the total size of a single message. */
-    public static final int DEFAULT_MAX_BYTES_IN_MESSAGE = 8092;
+    public static final int DEFAULT_MAX_BYTES_IN_MESSAGE = 8192;
     /** Default cap on the CONNECT credential length. */
     public static final int DEFAULT_MAX_CREDENTIAL_LENGTH = 23;
 

@@ -49,6 +49,8 @@ public final class AioConnection {
     private final ByteBuffer readBuffer = ByteBuffer.allocateDirect(8192);
     private byte[] preWsBuffer = new byte[2048];
     private int preWsCount;
+    /** Hard cap on buffered WebSocket handshake bytes before the header terminator arrives. */
+    static final int MAX_PRE_WS_HANDSHAKE_BYTES = 16 * 1024;
 
     private SSLEngine sslEngine;
     private ByteBuffer sslNetIn;
@@ -427,6 +429,12 @@ public final class AioConnection {
 
     private void appendPreWs(byte[] data) {
         int need = preWsCount + data.length;
+        // cap the pre-handshake buffer: an unauthenticated peer must not grow memory
+        // by withholding the handshake terminator
+        if (need > MAX_PRE_WS_HANDSHAKE_BYTES) {
+            fail(new IOException("WebSocket handshake exceeds " + MAX_PRE_WS_HANDSHAKE_BYTES + " bytes"));
+            return;
+        }
         if (need > preWsBuffer.length) {
             byte[] nb = new byte[Math.max(preWsBuffer.length << 1, need)];
             System.arraycopy(preWsBuffer, 0, nb, 0, preWsCount);
@@ -469,9 +477,26 @@ public final class AioConnection {
     }
 
     private void drainWs() {
-        byte[] payload;
-        while ((payload = wsDecoder.decodeOne()) != null) {
-            feedRmt(payload);
+        try {
+            byte[] payload;
+            while ((payload = wsDecoder.decodeOne()) != null) {
+                feedRmt(payload);
+            }
+            // answer PINGs with PONG echoes (RFC6455 5.5.3)
+            byte[] pong;
+            while ((pong = wsDecoder.pollPong()) != null) {
+                byte[] wire = WsFrameCodec.encodeControlFrame(WsFrameCodec.OP_PONG, pong, clientSide);
+                if (sslEngine != null) {
+                    writeTls(wire);
+                } else {
+                    writeRaw(wire);
+                }
+            }
+            if (wsDecoder.isCloseReceived()) {
+                close();
+            }
+        } catch (WsFrameCodec.Violation v) {
+            fail(v);
         }
     }
 

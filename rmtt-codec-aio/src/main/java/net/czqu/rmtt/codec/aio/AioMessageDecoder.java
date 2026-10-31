@@ -54,7 +54,8 @@ public final class AioMessageDecoder {
 
     /**
      * Try to decode the next complete frame from the buffer. Returns null when more bytes are
-     * needed. On a framing/protocol error the accumulated frame bytes that were read are dropped.
+     * needed. On a framing/protocol error the offending frame is consumed and the violation is
+     * rethrown, so the decoder never gets stuck re-parsing the same malformed bytes.
      *
      * @return the decoded message, or null when the frame is still incomplete
      */
@@ -63,7 +64,6 @@ public final class AioMessageDecoder {
             reset();
             return null;
         }
-        int headerByEnd = count - pos;
         int lengthBytes = 1;
         int remaining = -1;
         long value = 0;
@@ -101,22 +101,35 @@ public final class AioMessageDecoder {
         }
         int start = pos;
         int oldN = count;
-        // decode from [start, start+total)
+        // decode from [start, start+total); always consume the whole frame, even on error,
+        // so the cursor state stays consistent and the stream can resync
         count = start + total;
         pos = start;
-        RmttMessage msg = RmttWireCodec.decode(new net.czqu.rmtt.protocol.ByteArrayRmttByteReader(buf, start, total));
+        RmttMessage msg;
+        try {
+            msg = RmttWireCodec.decode(new net.czqu.rmtt.protocol.ByteArrayRmttByteReader(buf, start, total));
+        } catch (Throwable t) {
+            pos = start + total;
+            count = oldN;
+            afterFrameConsumed();
+            throw t;
+        }
         count = oldN;
         pos = start + total;
         if (msg != null) {
             LOG.trace("decoded frame type={} lengthBytes={} remainingLength={}",
                     msg.fixedHeader().messageType(), lengthBytes, remaining);
         }
+        afterFrameConsumed();
+        return msg;
+    }
+
+    private void afterFrameConsumed() {
         if (count - pos == 0) {
             reset();
         } else if (pos > buf.length / 2) {
             compact();
         }
-        return msg;
     }
 
     private void dropFrame() {

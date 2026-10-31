@@ -32,6 +32,7 @@ public final class RmttServerBuilder {
     private int wssPort = 0;
     private SSLContext sslContext;
     private ServerKeepalivePolicy keepalivePolicy = ServerKeepalivePolicy.defaults();
+    private int maxConnections = 10_000;
 
     /**
      * Required. The application-injected authentication policy (JWT / plain id / user-pass / ...).
@@ -148,6 +149,18 @@ public final class RmttServerBuilder {
     }
 
     /**
+     * Maximum concurrent connections accepted. Connections beyond the limit are closed
+     * immediately. Defaults to 10000; pass 0 for unlimited.
+     *
+     * @param maxConnections the connection cap (0 = unlimited)
+     * @return this builder
+     */
+    public RmttServerBuilder maxConnections(int maxConnections) {
+        this.maxConnections = maxConnections;
+        return this;
+    }
+
+    /**
      * Validate the configuration and build the server.
      *
      * @return the configured server
@@ -165,6 +178,6 @@ public final class RmttServerBuilder {
                     "tlsPort/wssPort require a caller-provided SSLContext via sslContext(...)");
         }
         return new RmttServer(connectionStore, authenticator, messageHandler,
-                connectionListener, port, tlsPort, wsPort, wssPort, sslContext, keepalivePolicy);
+                connectionListener, port, tlsPort, wsPort, wssPort, sslContext, keepalivePolicy, maxConnections);
     }
 }

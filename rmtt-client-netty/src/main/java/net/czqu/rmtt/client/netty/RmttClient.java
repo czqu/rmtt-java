@@ -24,6 +24,7 @@ import io.netty.handler.codec.quic.QuicSslContext;
 import io.netty.handler.codec.quic.QuicStreamChannel;
 import io.netty.handler.codec.quic.QuicStreamType;
 import io.netty.handler.ssl.SslContext;
+import net.czqu.rmtt.api.Credentials;
 import net.czqu.rmtt.codec.netty.RmttDecoder;
 import net.czqu.rmtt.codec.netty.RmttEncoder;
 import net.czqu.rmtt.codec.netty.ws.ByteBufToWsFrame;
@@ -100,6 +101,7 @@ public class RmttClient {
     private volatile boolean manuallyDisconnecting;
     private ScheduledExecutorService scheduler;
     private ScheduledFuture<?> adaptiveTick;
+    private ScheduledFuture<?> heartbeatTick;
     private kcp.KcpClient kcpClient;
     private Channel kcpDummy;
     private final AtomicBoolean reconnectScheduled = new AtomicBoolean();
@@ -170,7 +172,7 @@ public class RmttClient {
         }
         scheduler = Executors.newSingleThreadScheduledExecutor();
         LOG.info("connecting {}://{}:{} credential={} keepalive={}s",
-                transportName(), host, port, credential, connectKeepaliveProposal());
+                transportName(), host, port, Credentials.mask(credential), connectKeepaliveProposal());
         return connectOnce();
     }
 
@@ -397,7 +399,7 @@ public class RmttClient {
             public void onConnAck(ConnectReturnCode code, int kp) {
                 serverKp = kp;
                 connected = code == ConnectReturnCode.CONNECT_ACCEPTED;
-                LOG.info("CONNACK {} serverKp={}s credential={}", code, kp, credential);
+                LOG.info("CONNACK {} serverKp={}s credential={}", code, kp, Credentials.mask(credential));
                 if (connected) {
                     if (adaptiveHeartbeat) {
                         LOG.info("adaptive heartbeat enabled short={}s max={}s probeCount={} responseWindow={}ms fineStep={}s ceiling={}s",
@@ -424,13 +426,14 @@ public class RmttClient {
     }
 
     private void scheduleHeartbeat() {
+        stopFixedHeartbeat(); // reconnects schedule a fresh task; never leak the old one
         if (serverKp <= 0) {
             LOG.debug("keepalive disabled (serverKp=0)");
             return;
         }
         long checkMillis = Math.max(500, serverKp * 1000L / 4);
         LOG.debug("fixed keepalive scheduler start interval={}ms serverKp={}s", checkMillis, serverKp);
-        scheduler.scheduleAtFixedRate(this::heartbeatCheck, checkMillis, checkMillis, TimeUnit.MILLISECONDS);
+        heartbeatTick = scheduler.scheduleAtFixedRate(this::heartbeatCheck, checkMillis, checkMillis, TimeUnit.MILLISECONDS);
     }
 
     private void heartbeatCheck() {
@@ -504,13 +507,21 @@ public class RmttClient {
         }
     }
 
+    private void stopFixedHeartbeat() {
+        if (heartbeatTick != null) {
+            heartbeatTick.cancel(false);
+            heartbeatTick = null;
+        }
+    }
+
     private void onConnectionLost(String reason) {
         if (closed.get() || manuallyDisconnecting) {
             return;
         }
-        LOG.warn("connection lost: {} (credential={})", reason, credential);
+        LOG.warn("connection lost: {} (credential={})", reason, Credentials.mask(credential));
         connected = false;
         stopAdaptiveHeartbeat();
+        stopFixedHeartbeat();
         if (kcp) {
             if (kcpClient != null) {
                 try {
@@ -626,7 +637,7 @@ public class RmttClient {
 
     /** Graceful disconnect: send DISCONNECT then close the transport. */
     public void disconnect() {
-        LOG.debug("disconnect (credential={})", credential);
+        LOG.debug("disconnect (credential={})", Credentials.mask(credential));
         manuallyDisconnecting = true;
         if (kcp) {
             ClientSession s = session;
