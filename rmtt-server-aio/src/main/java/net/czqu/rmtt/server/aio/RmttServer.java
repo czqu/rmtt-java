@@ -50,6 +50,7 @@ public final class RmttServer {
     private final int wssPort;
     private final SSLContext sslContext;
     private final ServerKeepalivePolicy keepalivePolicy;
+    private final net.czqu.rmtt.api.ConnectionLimiter limiter;
     private final ConcurrentHashMap<AioServerSession, Long> sessions = new ConcurrentHashMap<>();
 
     private AsynchronousChannelGroup group;
@@ -68,6 +69,21 @@ public final class RmttServer {
                int wssPort,
                SSLContext sslContext,
                ServerKeepalivePolicy keepalivePolicy) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, port, tlsPort,
+                wsPort, wssPort, sslContext, keepalivePolicy, 0);
+    }
+
+    RmttServer(ConnectionStore connectionStore,
+               Authenticator authenticator,
+               RmttMessageHandler messageHandler,
+               ConnectionListener connectionListener,
+               int port,
+               int tlsPort,
+               int wsPort,
+               int wssPort,
+               SSLContext sslContext,
+               ServerKeepalivePolicy keepalivePolicy,
+               int maxConnections) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
@@ -78,6 +94,7 @@ public final class RmttServer {
         this.wssPort = wssPort;
         this.sslContext = sslContext;
         this.keepalivePolicy = keepalivePolicy;
+        this.limiter = new net.czqu.rmtt.api.ConnectionLimiter(maxConnections);
     }
 
     /**
@@ -128,9 +145,18 @@ public final class RmttServer {
     }
 
     private void setupConnection(AsynchronousSocketChannel ch, boolean tls, boolean ws) {
+        if (!limiter.tryAcquire()) {
+            LOG.warn("connection limit {} reached, rejecting new connection", limiter.maxConnections());
+            try {
+                ch.close();
+            } catch (IOException ignored) {
+                // best-effort close
+            }
+            return;
+        }
         AioServerSession session = new AioServerSession(
                 connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy);
-        session.onSessionClosed(() -> sessions.remove(session));
+        session.onSessionClosed(() -> dropSession(session));
         AioConnection conn = new AioConnection(ch, false, ws,
                 tls ? () -> serverEngine() : null, session);
         session.bind(conn);
@@ -144,16 +170,34 @@ public final class RmttServer {
         return engine;
     }
 
+    /** Drop a session from the table, releasing its admission slot exactly once. */
+    private void dropSession(AioServerSession session) {
+        if (sessions.remove(session) != null) {
+            limiter.release();
+        }
+    }
+
     private void checkHeartbeats() {
         long now = System.currentTimeMillis();
         for (AioServerSession session : sessions.keySet()) {
+            if (session.deviceId() == null) {
+                // unauthenticated session: close after the handshake window so idle or
+                // half-open connections cannot accumulate forever
+                if (now - session.lastReadTime() > AioServerSession.UNAUTHENTICATED_TIMEOUT_MILLIS) {
+                    LOG.warn("closing unauthenticated aio session (no CONNECT within {}ms)",
+                            AioServerSession.UNAUTHENTICATED_TIMEOUT_MILLIS);
+                    dropSession(session);
+                    session.closed();
+                }
+                continue;
+            }
             long kp = session.serverKp();
             if (kp <= 0) {
                 continue; // server_kp==0: keepalive-based liveness is disabled
             }
             if (now - session.lastReadTime() > kp * 1500) {
                 session.kick(DisconnectReturnCode.KEEPALIVE_TIMEOUT);
-                sessions.remove(session);
+                dropSession(session);
             }
         }
     }

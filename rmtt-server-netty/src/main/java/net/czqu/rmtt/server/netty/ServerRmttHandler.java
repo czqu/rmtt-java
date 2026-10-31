@@ -7,7 +7,9 @@ import io.netty.util.AttributeKey;
 import net.czqu.rmtt.api.AuthResult;
 import net.czqu.rmtt.api.Authenticator;
 import net.czqu.rmtt.api.ConnectionListener;
+import net.czqu.rmtt.api.ConnectionLimiter;
 import net.czqu.rmtt.api.ConnectionStore;
+import net.czqu.rmtt.api.Credentials;
 import net.czqu.rmtt.api.DeviceConnection;
 import net.czqu.rmtt.api.RmttMessageHandler;
 import net.czqu.rmtt.protocol.ConnAckVariableHeader;
@@ -44,15 +46,21 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
     static final AttributeKey<Long> LAST_READ_KEY = AttributeKey.valueOf("rmtt.lastRead");
     static final AttributeKey<Long> SERVER_KP_KEY = AttributeKey.valueOf("rmtt.serverKp");
     static final AttributeKey<ScheduledFuture<?>> REAPER_KEY = AttributeKey.valueOf("rmtt.reaper");
+    static final AttributeKey<ScheduledFuture<?>> PRE_AUTH_KEY = AttributeKey.valueOf("rmtt.preAuth");
+
+    /** A connection that has not completed CONNECT within this window is closed. */
+    static final long UNAUTHENTICATED_TIMEOUT_MILLIS = 30_000;
 
     private final ConnectionStore connectionStore;
     private final Authenticator authenticator;
     private final RmttMessageHandler messageHandler;
     private final ConnectionListener connectionListener;
     private final ServerKeepalivePolicy keepalivePolicy;
+    private final ConnectionLimiter limiter;
+    private boolean limitAcquired;
 
     /**
-     * Create the handler wiring the shared protocol services.
+     * Create the handler wiring the shared protocol services, with no connection limit.
      *
      * @param connectionStore     shared route table
      * @param authenticator       CONNECT authentication policy
@@ -65,11 +73,69 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
                              RmttMessageHandler messageHandler,
                              ConnectionListener connectionListener,
                              ServerKeepalivePolicy keepalivePolicy) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy,
+                new ConnectionLimiter(0));
+    }
+
+    /**
+     * Create the handler wiring the shared protocol services and a shared admission limiter.
+     *
+     * @param connectionStore     shared route table
+     * @param authenticator       CONNECT authentication policy
+     * @param messageHandler      upstream PUSH dispatch
+     * @param connectionListener  lifecycle callbacks
+     * @param keepalivePolicy     keepalive negotiation policy
+     * @param limiter             shared connection admission limiter
+     */
+    public ServerRmttHandler(ConnectionStore connectionStore,
+                             Authenticator authenticator,
+                             RmttMessageHandler messageHandler,
+                             ConnectionListener connectionListener,
+                             ServerKeepalivePolicy keepalivePolicy,
+                             ConnectionLimiter limiter) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
         this.connectionListener = connectionListener;
         this.keepalivePolicy = keepalivePolicy;
+        this.limiter = limiter;
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        if (!limiter.tryAcquire()) {
+            LOG.warn("connection limit {} reached, rejecting {}", limiter.maxConnections(),
+                    ctx.channel().remoteAddress());
+            ctx.close();
+            return;
+        }
+        limitAcquired = true;
+        // pre-auth handshake deadline: unauthenticated connections must not accumulate
+        ScheduledFuture<?> preAuth = ctx.executor().schedule(() -> {
+            if (ctx.channel().attr(DEVICE_ID_KEY).get() == null && ctx.channel().isActive()) {
+                LOG.warn("unauthenticated connection timed out, closing {}", ctx.channel().remoteAddress());
+                ctx.close();
+            }
+        }, UNAUTHENTICATED_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+        ctx.channel().attr(PRE_AUTH_KEY).set(preAuth);
+        super.channelActive(ctx);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        if (limitAcquired) {
+            limitAcquired = false;
+            limiter.release();
+        }
+        ScheduledFuture<?> preAuth = ctx.channel().attr(PRE_AUTH_KEY).getAndSet(null);
+        if (preAuth != null) {
+            preAuth.cancel(false);
+        }
+        ScheduledFuture<?> reaper = ctx.channel().attr(REAPER_KEY).getAndSet(null);
+        if (reaper != null) {
+            reaper.cancel(false);
+        }
+        unregisterAndNotify(ctx, "connection closed");
     }
 
     @Override
@@ -95,20 +161,28 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
     }
 
     private void handleConnect(ChannelHandlerContext ctx, RmttMessage msg) {
-        String credential = msg instanceof ConnectMessage
-                ? ((ConnectMessage) msg).connectPayload().credential() : null;
-        if (credential != null && credential.length() > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
-            LOG.warn("CONNECT rejected: credential too long ({} > max {})", credential.length(),
+        if (ctx.channel().attr(DEVICE_ID_KEY).get() != null) {
+            // one CONNECT per session; a repeat would re-register and self-kick the connection
+            LOG.warn("duplicate CONNECT on established session, closing {}", ctx.channel().remoteAddress());
+            ctx.writeAndFlush(RmttMessageFactory.disconnect(DisconnectReturnCode.PROTOCOL_VIOLATION))
+                    .addListener(ChannelFutureListener.CLOSE);
+            return;
+        }
+        byte[] rawCredential = msg instanceof ConnectMessage ? ((ConnectMessage) msg).payload() : null;
+        if (rawCredential != null && rawCredential.length > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
+            LOG.warn("CONNECT rejected: credential too long ({} > max {})", rawCredential.length,
                     RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
             ctx.writeAndFlush(connAck(ConnectReturnCode.CONNECT_UNAUTHORIZED, 0))
                     .addListener(ChannelFutureListener.CLOSE);
             return;
         }
+        String credential = msg instanceof ConnectMessage
+                ? ((ConnectMessage) msg).connectPayload().credential() : null;
         AuthResult authResult;
         try {
             authResult = authenticator.authenticate(credential);
         } catch (Exception e) {
-            LOG.error("auth error for credential={}", credential, e);
+            LOG.error("auth error for credential={}", Credentials.mask(credential), e);
             ctx.writeAndFlush(connAck(ConnectReturnCode.CONNECT_SERVER_UNAVAILABLE, 0));
             ctx.close();
             return;
@@ -116,7 +190,7 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
         if (authResult == null || !authResult.allowed()) {
             ConnectReturnCode code = authResult != null ? authResult.returnCode()
                     : ConnectReturnCode.CONNECT_UNAUTHORIZED;
-            LOG.warn("CONNECT rejected credential={} code={}", credential, code);
+            LOG.warn("CONNECT rejected credential={} code={}", Credentials.mask(credential), code);
             ctx.writeAndFlush(connAck(code, 0)).addListener(ChannelFutureListener.CLOSE);
             return;
         }
@@ -139,6 +213,10 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
             }
         });
         ctx.channel().attr(DEVICE_ID_KEY).set(deviceId);
+        ScheduledFuture<?> preAuth = ctx.channel().attr(PRE_AUTH_KEY).getAndSet(null);
+        if (preAuth != null) {
+            preAuth.cancel(false); // handshake done; the deadline is no longer needed
+        }
         scheduleIdleReaper(ctx, kp);
         connectionListener.onConnectionEstablished(deviceId);
         LOG.info("device {} connected (proposal={}s serverKp={}s)", deviceId,
@@ -179,15 +257,6 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
             return;
         }
         messageHandler.onMessage(deviceId, msg.payload());
-    }
-
-    @Override
-    public void channelInactive(ChannelHandlerContext ctx) {
-        ScheduledFuture<?> reaper = ctx.channel().attr(REAPER_KEY).getAndSet(null);
-        if (reaper != null) {
-            reaper.cancel(false);
-        }
-        unregisterAndNotify(ctx, "connection closed");
     }
 
     @Override

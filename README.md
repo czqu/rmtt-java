@@ -63,7 +63,15 @@ Use `rmtt-server-aio` / `rmtt-client-aio` for the AIO stack, or `rmtt-core` alon
 ```java
 RmttServer server = new RmttServerBuilder()
         .port(18883)
-        .authenticator(credential -> AuthResult.allow("device-" + credential))
+        // credentials are secrets: validate them and derive deviceId from trusted data.
+        // Never echo the raw credential back as deviceId - that lets any client
+        // impersonate any device (take over sessions, receive downstream pushes).
+        .authenticator(credential -> {
+            String deviceId = lookupDeviceId(credential); // e.g. signed-JWT claim / DB lookup
+            return deviceId != null
+                    ? AuthResult.allow(deviceId)
+                    : AuthResult.reject("invalid credential");
+        })
         .messageHandler((deviceId, payload) ->
                 System.out.println("PUSH from " + deviceId + ": "
                         + new String(payload, StandardCharsets.UTF_8)))

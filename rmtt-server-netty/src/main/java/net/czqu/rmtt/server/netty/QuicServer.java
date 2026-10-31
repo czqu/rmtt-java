@@ -7,11 +7,11 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
-import io.netty.handler.codec.quic.InsecureQuicTokenHandler;
 import io.netty.handler.codec.quic.QuicServerCodecBuilder;
 import io.netty.handler.codec.quic.QuicSslContext;
 import io.netty.handler.codec.quic.QuicStreamChannel;
 import net.czqu.rmtt.api.Authenticator;
+import net.czqu.rmtt.api.ConnectionLimiter;
 import net.czqu.rmtt.api.ConnectionListener;
 import net.czqu.rmtt.api.ConnectionStore;
 import net.czqu.rmtt.api.RmttMessageHandler;
@@ -43,6 +43,7 @@ public final class QuicServer {
     private final ServerKeepalivePolicy keepalivePolicy;
     private final int port;
     private final QuicSslContext sslContext;
+    private final ConnectionLimiter limiter;
 
     private EventLoopGroup group;
     private Channel channel;
@@ -54,6 +55,18 @@ public final class QuicServer {
                ServerKeepalivePolicy keepalivePolicy,
                int port,
                QuicSslContext sslContext) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy,
+                port, sslContext, new ConnectionLimiter(0));
+    }
+
+    QuicServer(ConnectionStore connectionStore,
+               Authenticator authenticator,
+               RmttMessageHandler messageHandler,
+               ConnectionListener connectionListener,
+               ServerKeepalivePolicy keepalivePolicy,
+               int port,
+               QuicSslContext sslContext,
+               ConnectionLimiter limiter) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
@@ -61,6 +74,7 @@ public final class QuicServer {
         this.keepalivePolicy = keepalivePolicy;
         this.port = port;
         this.sslContext = sslContext;
+        this.limiter = limiter;
     }
 
     /** Bind the QUIC (UDP) listener. Call after the boss/worker groups are up. */
@@ -75,14 +89,14 @@ public final class QuicServer {
                 .initialMaxStreamDataBidirectionalRemote(256_000)
                 .initialMaxStreamsBidirectional(1024)
                 .initialMaxStreamsUnidirectional(16)
-                .tokenHandler(InsecureQuicTokenHandler.INSTANCE)
+                .tokenHandler(new HmacQuicTokenHandler())
                 .streamHandler(new ChannelInitializer<QuicStreamChannel>() {
                     @Override
                     protected void initChannel(QuicStreamChannel ch) {
                         ch.pipeline().addLast(new RmttDecoder());
                         ch.pipeline().addLast(RmttEncoder.INSTANCE);
                         ch.pipeline().addLast(new ServerRmttHandler(connectionStore, authenticator,
-                                messageHandler, connectionListener, keepalivePolicy));
+                                messageHandler, connectionListener, keepalivePolicy, limiter));
                     }
                 })
                 .build();
@@ -100,7 +114,8 @@ public final class QuicServer {
                                         ? ((io.netty.channel.socket.DatagramPacket) msg).content().readableBytes()
                                         : (msg instanceof io.netty.buffer.ByteBuf
                                             ? ((io.netty.buffer.ByteBuf) msg).readableBytes() : -1);
-                                LOG.warn("QUIC srv datagram read: {} bytes", sz);
+                                // debug only: arbitrary UDP traffic must not flood the logs
+                                LOG.debug("QUIC srv datagram read: {} bytes", sz);
                                 ctx.fireChannelRead(msg);
                             }
 

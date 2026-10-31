@@ -1,10 +1,15 @@
 package net.czqu.rmtt.transport.aio;
 
+import net.czqu.rmtt.protocol.RmttProtocol;
+
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.ArrayDeque;
 
 /**
  * Minimal RFC6455 WebSocket binary-frame codec (one RMTT packet = one binary frame).
- * Handles masking, fragmentation (continuation frames), and control frames.
+ * Handles masking, fragmentation (continuation frames), and control frames (PING is answered
+ * with a queued PONG via {@link Decoder#pollPong()}). Inbound frame size is capped.
  */
 public final class WsFrameCodec {
 
@@ -21,7 +26,22 @@ public final class WsFrameCodec {
     /** Pong-frame opcode. */
     public static final byte OP_PONG = 0xA;
 
-    private static final byte[] MASK_KEY = new byte[4];
+    /** Mask keys and handshake keys must not be predictable. */
+    private static final SecureRandom RANDOM = new SecureRandom();
+
+    /**
+     * Wire-level WebSocket framing violation (bad length, bad fragmentation, oversized frame).
+     */
+    public static final class Violation extends RuntimeException {
+        /**
+         * Construct with a description of the violation.
+         *
+         * @param message the violation description
+         */
+        public Violation(String message) {
+            super(message);
+        }
+    }
 
     private WsFrameCodec() {
     }
@@ -34,6 +54,22 @@ public final class WsFrameCodec {
      * @return the complete WebSocket binary frame
      */
     public static byte[] encodeFrame(byte[] payload, boolean masked) {
+        return encode(OP_BINARY, payload, masked);
+    }
+
+    /**
+     * Wrap a control payload (e.g. PONG echo) into a WebSocket control frame.
+     *
+     * @param opcode  one of {@link #OP_CLOSE}, {@link #OP_PING}, {@link #OP_PONG}
+     * @param payload the control payload (at most 125 bytes)
+     * @param masked  true to mask the payload (client side)
+     * @return the complete WebSocket control frame
+     */
+    public static byte[] encodeControlFrame(byte opcode, byte[] payload, boolean masked) {
+        return encode(opcode, payload, masked);
+    }
+
+    private static byte[] encode(byte opcode, byte[] payload, boolean masked) {
         int headerLen = 2;
         int len = payload.length;
         if (len >= 126 && len <= 0xFFFF) {
@@ -45,7 +81,7 @@ public final class WsFrameCodec {
             headerLen += 4;
         }
         byte[] frame = new byte[headerLen + len];
-        frame[0] = (byte) (0x80 | OP_BINARY);
+        frame[0] = (byte) (0x80 | opcode);
         if (len < 126) {
             frame[1] = (byte) (len | (masked ? 0x80 : 0));
         } else if (len <= 0xFFFF) {
@@ -61,13 +97,11 @@ public final class WsFrameCodec {
         }
         int off = headerLen - (masked ? 4 : 0);
         if (masked) {
-            int key = (int) System.nanoTime();
-            frame[off] = (byte) key;
-            frame[off + 1] = (byte) (key >>> 8);
-            frame[off + 2] = (byte) (key >>> 16);
-            frame[off + 3] = (byte) (key >>> 24);
+            byte[] key = new byte[4];
+            RANDOM.nextBytes(key);
+            System.arraycopy(key, 0, frame, off, 4);
             for (int i = 0; i < len; i++) {
-                frame[off + 4 + i] = (byte) (payload[i] ^ frame[off + (i & 3)]);
+                frame[off + 4 + i] = (byte) (payload[i] ^ key[i & 3]);
             }
             return frame;
         }
@@ -80,11 +114,28 @@ public final class WsFrameCodec {
         private byte[] buf = new byte[512];
         private int count;
         private int pos;
+        private final int maxFrameSize;
+        /** Accumulated fragments of the message currently being reassembled. */
+        private byte[] fragBuf = new byte[0];
+        private int fragLen;
+        private final ArrayDeque<byte[]> pendingPongs = new ArrayDeque<>();
+        private boolean closeReceived;
+        private byte[] closeReason;
 
         /**
-         * Create an empty inbound decoder.
+         * Create an empty inbound decoder with the default frame size cap.
          */
         public Decoder() {
+            this(RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE + 16);
+        }
+
+        /**
+         * Create an empty inbound decoder with an explicit frame size cap.
+         *
+         * @param maxFrameSize maximum accepted WebSocket message payload size
+         */
+        public Decoder(int maxFrameSize) {
+            this.maxFrameSize = maxFrameSize;
         }
 
         /**
@@ -104,16 +155,17 @@ public final class WsFrameCodec {
         }
 
         /**
-         * Returns the payload of the next complete binary message, or null if more bytes needed.
+         * Returns the payload of the next complete message (fragmentation reassembled), or null if
+         * more bytes are needed. PING frames queue a PONG reply retrievable via {@link #pollPong()}.
          *
-         * @return the next unfragmented binary message payload, or null when incomplete
+         * @return the next unfragmented message payload, or null when incomplete
          */
         public byte[] decodeOne() {
             while (count - pos > 0) {
-                int p = pos;
                 if (count - pos < 2) {
                     return null;
                 }
+                int p = pos;
                 int b0 = buf[p] & 0xFF;
                 boolean fin = (b0 & 0x80) != 0;
                 int opcode = b0 & 0x0F;
@@ -131,69 +183,129 @@ public final class WsFrameCodec {
                     if (count - pos < 10) {
                         return null;
                     }
+                    // RFC6455: the most significant bit of a 64-bit length MUST be 0
+                    if ((buf[p1 + 1] & 0x80) != 0) {
+                        throw new Violation("invalid 64-bit payload length (MSB set)");
+                    }
                     len = 0;
                     for (int i = 0; i < 8; i++) {
                         len = (len << 8) | (buf[p1 + 1 + i] & 0xFF);
                     }
                     header = 10;
                 }
+                if (len > maxFrameSize) {
+                    throw new Violation("ws frame too large: " + len + " bytes (max " + maxFrameSize + ")");
+                }
+                boolean control = opcode >= 0x8;
+                if (control && (!fin || len > 125)) {
+                    throw new Violation("invalid control frame (fin=" + fin + " len=" + len + ")");
+                }
+                if (masked && count - pos < header + 4) {
+                    return null;
+                }
+                int maskStart = p + header;
+                byte[] mask = null;
                 if (masked) {
-                    if (count - pos < header + 4) {
-                        return null;
-                    }
-                    int maskStart = p + header;
-                    byte[] mask = new byte[4];
-                    mask[0] = buf[maskStart];
-                    mask[1] = buf[maskStart + 1];
-                    mask[2] = buf[maskStart + 2];
-                    mask[3] = buf[maskStart + 3];
+                    mask = new byte[]{buf[maskStart], buf[maskStart + 1], buf[maskStart + 2], buf[maskStart + 3]};
                     header += 4;
-                    int start = p + header;
-                    if (count - pos < header + len) {
-                        return null;
-                    }
-                    byte[] payload = new byte[(int) len];
+                }
+                if (count - pos < header + len) {
+                    return null;
+                }
+                int start = p + header;
+                byte[] payload = new byte[(int) len];
+                if (masked) {
                     for (int i = 0; i < len; i++) {
                         payload[i] = (byte) (buf[start + i] ^ mask[i & 3]);
                     }
-                    pos = p + header + (int) len;
-                    switch (opcode) {
-                        case OP_PING:
-                            continue;
-                        case OP_PONG:
-                        case OP_CLOSE:
-                            continue;
-                        case OP_BINARY:
-                        case OP_TEXT:
-                            return payload;
-                        default:
-                            continue;
-                    }
                 } else {
-                    int start = p + header;
-                    if (count - pos < header + len) {
-                        return null;
-                    }
-                    byte[] payload = new byte[(int) len];
                     System.arraycopy(buf, start, payload, 0, (int) len);
-                    pos = p + header + (int) len;
-                    switch (opcode) {
-                        case OP_PING:
-                            continue;
-                        case OP_PONG:
-                        case OP_CLOSE:
-                            continue;
-                        case OP_BINARY:
-                        case OP_TEXT:
-                            return payload;
-                        default:
-                            continue;
-                    }
+                }
+                pos = p + header + (int) len;
+                switch (opcode) {
+                    case OP_PING:
+                        pendingPongs.add(payload);
+                        continue;
+                    case OP_PONG:
+                        continue;
+                    case OP_CLOSE:
+                        closeReceived = true;
+                        closeReason = payload;
+                        continue;
+                    case OP_BINARY:
+                    case OP_TEXT:
+                    case OP_CONT:
+                        byte[] message = collectFragment(opcode, payload, fin);
+                        if (message != null) {
+                            return message;
+                        }
+                        continue;
+                    default:
+                        throw new Violation("unsupported opcode " + opcode);
                 }
             }
             pos = 0;
             count = 0;
             return null;
+        }
+
+        private byte[] collectFragment(int opcode, byte[] payload, boolean fin) {
+            if (opcode == OP_CONT) {
+                if (fragLen == 0) {
+                    throw new Violation("continuation frame without a started message");
+                }
+            } else {
+                if (fragLen != 0) {
+                    throw new Violation("new data frame interleaved with unfinished fragmented message");
+                }
+                if (fin) {
+                    return payload; // unfragmented fast path
+                }
+            }
+            if (fragLen + payload.length > maxFrameSize) {
+                throw new Violation("fragmented message exceeds max frame size " + maxFrameSize);
+            }
+            if (fragLen + payload.length > fragBuf.length) {
+                byte[] nb = new byte[Math.max(fragBuf.length << 1, fragLen + payload.length)];
+                System.arraycopy(fragBuf, 0, nb, 0, fragLen);
+                fragBuf = nb;
+            }
+            System.arraycopy(payload, 0, fragBuf, fragLen, payload.length);
+            fragLen += payload.length;
+            if (!fin) {
+                return null;
+            }
+            byte[] message = new byte[fragLen];
+            System.arraycopy(fragBuf, 0, message, 0, fragLen);
+            fragLen = 0;
+            return message;
+        }
+
+        /**
+         * Poll a queued PONG reply produced by a received PING frame.
+         *
+         * @return the PONG payload to echo back, or null when none is pending
+         */
+        public byte[] pollPong() {
+            return pendingPongs.poll();
+        }
+
+        /**
+         * Whether a CLOSE frame has been received.
+         *
+         * @return true when a CLOSE frame has been received
+         */
+        public boolean isCloseReceived() {
+            return closeReceived;
+        }
+
+        /**
+         * The CLOSE frame payload (reason code + optional text).
+         *
+         * @return the CLOSE frame payload (reason), or null when no CLOSE was received
+         */
+        public byte[] closeReason() {
+            return closeReason;
         }
     }
 
@@ -219,12 +331,12 @@ public final class WsFrameCodec {
      *
      * @param host the Host header hostname
      * @param port the Host header port
-     * @param path the upgrade request path, "/rmtt" when null or empty
+     * @param path the request path, "/rmtt" when null or empty
      * @return the full HTTP request bytes
      */
     public static byte[] buildHandshakeRequest(String host, int port, String path) {
         byte[] keyBytes = new byte[16];
-        new java.util.Random().nextBytes(keyBytes);
+        RANDOM.nextBytes(keyBytes);
         String key = java.util.Base64.getEncoder().encodeToString(keyBytes);
         return ("GET " + (path == null || path.isEmpty() ? "/rmtt" : path) + " HTTP/1.1\r\n"
                 + "Host: " + host + ":" + port + "\r\n"

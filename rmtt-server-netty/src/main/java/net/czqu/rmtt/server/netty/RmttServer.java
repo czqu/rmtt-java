@@ -63,6 +63,7 @@ public class RmttServer {
     private final String wsPath;
     private final SslContext wssSslContext;
     private final ServerKeepalivePolicy keepalivePolicy;
+    private final net.czqu.rmtt.api.ConnectionLimiter limiter;
     private final KcpServer kcpServer;
     private final QuicServer quicServer;
 
@@ -83,6 +84,24 @@ public class RmttServer {
                int kcpPort,
                int quicPort,
                io.netty.handler.codec.quic.QuicSslContext quicSslContext) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, port, wsPort,
+                wssPort, wsPath, wssSslContext, keepalivePolicy, kcpPort, quicPort, quicSslContext, 0);
+    }
+
+    RmttServer(ConnectionStore connectionStore,
+               Authenticator authenticator,
+               RmttMessageHandler messageHandler,
+               ConnectionListener connectionListener,
+               int port,
+               int wsPort,
+               int wssPort,
+               String wsPath,
+               SslContext wssSslContext,
+               ServerKeepalivePolicy keepalivePolicy,
+               int kcpPort,
+               int quicPort,
+               io.netty.handler.codec.quic.QuicSslContext quicSslContext,
+               int maxConnections) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
@@ -93,11 +112,12 @@ public class RmttServer {
         this.wsPath = wsPath == null || wsPath.isEmpty() ? "/rmtt" : wsPath;
         this.wssSslContext = wssSslContext;
         this.keepalivePolicy = keepalivePolicy;
+        this.limiter = new net.czqu.rmtt.api.ConnectionLimiter(maxConnections);
         this.kcpServer = kcpPort > 0 ? new KcpServer(connectionStore, authenticator, messageHandler,
-                connectionListener, keepalivePolicy, kcpPort) : null;
+                connectionListener, keepalivePolicy, kcpPort, limiter) : null;
         this.quicServer = quicPort > 0 && quicSslContext != null
                 ? new QuicServer(connectionStore, authenticator, messageHandler,
-                connectionListener, keepalivePolicy, quicPort, quicSslContext) : null;
+                connectionListener, keepalivePolicy, quicPort, quicSslContext, limiter) : null;
     }
 
     /**
@@ -151,7 +171,7 @@ public class RmttServer {
                 ch.pipeline().addLast(new RmttDecoder());
                 ch.pipeline().addLast(RmttEncoder.INSTANCE);
                 ch.pipeline().addLast(new ServerRmttHandler(connectionStore, authenticator,
-                        messageHandler, connectionListener, keepalivePolicy));
+                        messageHandler, connectionListener, keepalivePolicy, limiter));
             }
         };
     }
@@ -172,7 +192,7 @@ public class RmttServer {
                 ch.pipeline().addLast(new ByteBufToWsFrame());
                 ch.pipeline().addLast(RmttEncoder.INSTANCE);
                 ch.pipeline().addLast(new ServerRmttHandler(connectionStore, authenticator,
-                        messageHandler, connectionListener, keepalivePolicy));
+                        messageHandler, connectionListener, keepalivePolicy, limiter));
             }
         });
         bootstrap.bind(p).addListener((ChannelFutureListener) f -> {
