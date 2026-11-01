@@ -89,7 +89,8 @@ jobs:
   # ------------------------------------------------------------------
   # Cross-language end-to-end: Java rmtt server + rmtt-go v1.0.2 client.
   # The Java integration tests (*IT via failsafe) already run inside the
-  # build job; this job proves Java/Go interoperability over TCP.
+  # build job; this job proves Java/Go interoperability over TCP, including
+  # the blackbox-report regression guards (300-byte credential, 1 MiB frame).
   # ------------------------------------------------------------------
   e2e-go:
     name: E2E (Java server + Go client)
@@ -130,7 +131,9 @@ jobs:
           exit $GO_RC
 
   # ------------------------------------------------------------------
-  # Reverse cross-language e2e: rmtt-go v1.0.2 server + Java rmtt client.
+  # Reverse cross-language e2e: rmtt-go v1.0.2 server + Java rmtt client,
+  # including the blackbox-report regression guards (300-byte credential,
+  # 1 MiB frame).
   # ------------------------------------------------------------------
   e2e-go-server:
     name: E2E (Go server + Java client)
@@ -216,3 +219,59 @@ jobs:
           kill $SERVER_PID 2>/dev/null || true
           cat ../server.log || true
           exit $RUST_RC
+
+  # ------------------------------------------------------------------
+  # Raw-wire protocol probe (blackbox report cases that no client library
+  # exposes):
+  #   - oversized declared frame -> DISCONNECT(0x04) then a clean close,
+  #     with no follow-up decode of the residual bytes (F1/F11)
+  #   - graceful shutdown (SIGTERM) -> DISCONNECT(0x03) to online devices
+  #     before the connections die (F3)
+  # ------------------------------------------------------------------
+  e2e-wire:
+    name: "E2E (wire probe: oversize reject + shutdown code)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Build server jar
+        run: mvn -B -ntp -pl rmtt-it -am -DskipTests package
+
+      - name: Run wire probes against the Java server
+        run: |
+          java -jar rmtt-it/target/rmtt-e2e-server.jar 18997 > server.log 2>&1 &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            grep -q "E2E_SERVER_READY" server.log && break
+            sleep 1
+          done
+          grep "E2E_SERVER_READY" server.log
+
+          # F1/F11: a frame declaring 16 MiB + 1 must be rejected with
+          # DISCONNECT(0x04) and the connection must close without a follow-up frame
+          java -cp rmtt-it/target/rmtt-e2e-server.jar \
+            net.czqu.rmtt.it.WireProbeMain oversize 127.0.0.1 18997
+
+          # F3: SIGTERM triggers the graceful-shutdown hook -> DISCONNECT(0x03)
+          java -cp rmtt-it/target/rmtt-e2e-server.jar \
+            net.czqu.rmtt.it.WireProbeMain shutdown-code 127.0.0.1 18997 > wire.log 2>&1 &
+          PROBE_PID=$!
+          for i in $(seq 1 30); do
+            grep -q "WIRE_PROBE_CONNECTED" wire.log && break
+            sleep 1
+          done
+          grep "WIRE_PROBE_CONNECTED" wire.log
+          kill -TERM $SERVER_PID
+          wait $PROBE_PID
+          PROBE_RC=$?
+          wait $SERVER_PID 2>/dev/null || true
+          cat wire.log server.log || true
+          exit $PROBE_RC

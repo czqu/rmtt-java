@@ -5,7 +5,6 @@ import io.netty.buffer.Unpooled;
 import kcp.KcpListener;
 import kcp.Ukcp;
 import net.czqu.rmtt.codec.netty.ByteBufRmttByteReader;
-import net.czqu.rmtt.codec.netty.ByteBufRmttByteWriter;
 import net.czqu.rmtt.protocol.ConnAckMessage;
 import net.czqu.rmtt.protocol.ConnectPayload;
 import net.czqu.rmtt.protocol.ConnectReturnCode;
@@ -211,9 +210,18 @@ class KcpClientSession implements KcpListener, ClientSession {
         if (u == null || !u.isActive()) {
             return;
         }
-        ByteBuf out = Unpooled.buffer();
-        RmttWireCodec.encode(msg, new ByteBufRmttByteWriter(out));
-        u.write(out);
-        out.release();
+        byte[] frame = RmttWireCodec.encodeToBytes(msg);
+        // chunked write: kcp-base refuses a single message above 255 segments (~350 KiB at the
+        // default MTU) and drops it, which would stall any larger frame; the server parses frames
+        // from the byte stream, so chunk boundaries are transparent
+        int offset = 0;
+        while (offset < frame.length) {
+            int n = Math.min(256 * 1024, frame.length - offset);
+            ByteBuf part = Unpooled.buffer(n);
+            part.writeBytes(frame, offset, n);
+            u.write(part);
+            part.release();
+            offset += n;
+        }
     }
 }

@@ -96,6 +96,10 @@ public final class KcpServer {
     public void start() {
         ChannelConfig config = new ChannelConfig();
         config.setUseConvChannel(true);
+        // larger kcp windows: a single RMTT frame can reach 16 MiB and benefits from a wider
+        // in-flight window (protocol-compatible; the window is advisory in ACK headers)
+        config.setSndwnd(256);
+        config.setRcvwnd(256);
         kcpServer = new kcp.KcpServer(config, sessionListener);
         kcpServer.start(port);
         sessionListener.startReaper();
