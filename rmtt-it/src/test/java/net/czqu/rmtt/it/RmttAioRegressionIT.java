@@ -134,6 +134,39 @@ class RmttAioRegressionIT {
         }
     }
 
+    // ---------------------------------------------------------------- malformed varint (AIO)
+
+    @Test
+    void malformedRemainingLengthIsRejectedWithDisconnect04() throws Exception {
+        int port = RmttEndToEndIT.freeTcpPort();
+        RmttServer server = new RmttServerBuilder()
+                .port(port)
+                .authenticator(AuthResult::allow)
+                .messageHandler((deviceId, payload) -> {
+                })
+                .build();
+        server.start();
+        try (Socket socket = new Socket("127.0.0.1", port)) {
+            socket.setSoTimeout(5000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+            rawConnect(out, "aio-badvarint", 30);
+            RmttEndToEndIT.WireFrame connack = readFrame(in);
+            assertEquals(2, connack.type, "CONNACK expected");
+            // a remaining-length varint with 4 continuation bytes can never terminate
+            out.write(new byte[]{0x30, (byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80});
+            out.flush();
+            RmttEndToEndIT.WireFrame reply = readFrame(in);
+            assertNotNull(reply, "DISCONNECT expected");
+            assertEquals(14, reply.type, "DISCONNECT expected");
+            assertEquals(0x04, reply.body[0] & 0xFF, "protocol violation code expected");
+            RmttEndToEndIT.WireFrame extra = readFrame(in);
+            assertEquals(null, extra, "exactly one frame expected before close");
+        } finally {
+            server.closeAll();
+        }
+    }
+
     // ---------------------------------------------------------------- F3 (AIO)
 
     @Test

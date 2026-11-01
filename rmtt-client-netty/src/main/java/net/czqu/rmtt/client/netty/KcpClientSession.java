@@ -117,7 +117,7 @@ class KcpClientSession implements KcpListener, ClientSession {
                     pending.resetReaderIndex();
                     break;
                 }
-                if (header.remainingLength() < 0 || header.remainingLength() > maxBytesInMessage) {
+                if (header.remainingLength() > maxBytesInMessage) {
                     pending.resetReaderIndex();
                     closeSession("message too large");
                     break;

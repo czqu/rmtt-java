@@ -86,11 +86,14 @@ public final class AioMessageDecoder {
         }
         if (!ok) {
             if (scanned > RmttCodecUtil.MAX_LENGTH_BYTES) {
-                dropFrame();
+                // 4 continuation bytes: the varint can never terminate, so the length field is
+                // malformed - report it like RmttWireCodec.decodeHeader instead of resyncing
+                throw new ProtocolViolation("remaining length exceeds "
+                        + RmttCodecUtil.MAX_LENGTH_BYTES + " bytes");
             }
             return null; // header still incomplete
         }
-        if (remaining < 0 || remaining > maxMessageSize) {
+        if (remaining > maxMessageSize) {
             LOG.warn("protocol violation on decode: message too large: {} bytes", remaining);
             dropFrame();
             throw new ProtocolViolation("message too large: " + remaining + " bytes");

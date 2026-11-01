@@ -544,12 +544,12 @@ public final class AioConnection {
                             new FixedHeader(RmttMessageType.CONNACK, false, false, false, false, 3),
                             new ConnAckVariableHeader(ConnectReturnCode.CONNECT_BAD_PROTOCOL_VERSION, 0),
                             null)));
-            fail(e);
+            failAfterFlush(e);
         } catch (ProtocolViolation e) {
             // other violations -> DISCONNECT(0x04) then close
             writeFrame(RmttWireCodec.encodeToBytes(
                     RmttMessageFactory.disconnect(DisconnectReturnCode.PROTOCOL_VIOLATION)));
-            fail(e);
+            failAfterFlush(e);
         }
     }
 
@@ -618,6 +618,21 @@ public final class AioConnection {
 
     private void fail(Throwable cause) {
         close();
+        try {
+            handler.onClosed(cause);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Like {@link #fail(Throwable)} but lets queued frames flush first: the violation responses
+     * (CONNACK 0x01 / DISCONNECT 0x04) must reach the peer before the connection dies.
+     */
+    private void failAfterFlush(Throwable cause) {
+        closeOnFlush = true;
+        if (!closed.get()) {
+            flushWrites();
+        }
         try {
             handler.onClosed(cause);
         } catch (Exception ignored) {

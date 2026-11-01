@@ -63,8 +63,14 @@ public class RmttDecoder extends ByteToMessageDecoder {
         } catch (Underflow u) {
             in.resetReaderIndex();
             return;
+        } catch (ProtocolViolation pv) {
+            // malformed header (e.g. a remaining-length varint over 4 bytes): report once and
+            // stop parsing, exactly like the oversized-frame path below
+            discarding = true;
+            in.skipBytes(in.readableBytes());
+            throw pv;
         }
-        if (header.remainingLength() < 0 || header.remainingLength() > maxBytesInMessage) {
+        if (header.remainingLength() > maxBytesInMessage) {
             // the declared frame cannot be honoured: report once, then drop every remaining byte
             discarding = true;
             in.skipBytes(in.readableBytes());
