@@ -38,8 +38,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static net.czqu.rmtt.it.RmttEndToEndIT.readFrame;
 import static net.czqu.rmtt.it.RmttEndToEndIT.rawConnect;
+import static net.czqu.rmtt.it.RmttEndToEndIT.waitFor;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -151,8 +153,13 @@ class RmttAioRegressionIT {
             rawConnect(out, "aio-shutdown", 30);
             RmttEndToEndIT.WireFrame connack = readFrame(in);
             assertEquals(2, connack.type, "CONNACK expected");
+            // CONNACK is written before the device is registered in the route table (so a
+            // downstream push cannot beat the handshake); the shutdown notification walks that
+            // table, so wait until registration completes before shutting down
+            waitFor(() -> server.isOnline("aio-shutdown"), "device to register");
             server.closeAll();
             RmttEndToEndIT.WireFrame bye = readFrame(in);
+            assertNotNull(bye, "DISCONNECT expected on shutdown, got EOF");
             assertEquals(14, bye.type, "DISCONNECT expected on shutdown");
             assertEquals(0x03, bye.body[0] & 0xFF, "SERVER_SHUTDOWN code expected");
         } finally {

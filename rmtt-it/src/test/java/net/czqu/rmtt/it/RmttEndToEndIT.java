@@ -56,6 +56,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -450,8 +451,13 @@ class RmttEndToEndIT {
             rawConnect(out, "e2e-shutdown", 30);
             WireFrame connack = readFrame(in);
             assertEquals(2, connack.type, "CONNACK expected");
+            // CONNACK is written before the device is registered in the route table (so a
+            // downstream push cannot beat the handshake); the shutdown notification walks that
+            // table, so wait until registration completes before shutting down
+            waitFor(() -> own.isOnline("e2e-shutdown"), "device to register");
             own.closeAll();
             WireFrame bye = readFrame(in);
+            assertNotNull(bye, "DISCONNECT expected on shutdown, got EOF");
             assertEquals(14, bye.type, "DISCONNECT expected on shutdown");
             assertEquals(0x03, bye.body[0] & 0xFF, "SERVER_SHUTDOWN code expected");
         } finally {
@@ -727,7 +733,7 @@ class RmttEndToEndIT {
         return new JcaX509CertificateConverter().getCertificate(builder.build(signer));
     }
 
-    private static void waitFor(Check cond, String what) throws Exception {
+    static void waitFor(Check cond, String what) throws Exception {
         long deadline = System.currentTimeMillis() + 5000;
         while (System.currentTimeMillis() < deadline) {
             if (cond.matches()) {
@@ -738,7 +744,7 @@ class RmttEndToEndIT {
         throw new AssertionError("timed out waiting for " + what);
     }
 
-    private interface Check {
+    interface Check {
         boolean matches();
     }
 

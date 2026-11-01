@@ -25,6 +25,7 @@ public final class WireProbeMain {
 
     private static final int DISCONNECT = 14;
     private static final int CONNACK = 2;
+    private static final int PINGRESP = 6;
 
     private WireProbeMain() {
     }
@@ -62,6 +63,15 @@ public final class WireProbeMain {
             Frame connack = readFrame(in);
             if (connack == null || connack.type != CONNACK) {
                 fail("no CONNACK");
+            }
+            // PINGREQ -> PINGRESP round trip: the server processes inbound messages in order, so
+            // the PINGRESP proves the CONNECT handling (including route-table registration)
+            // completed before the driver shuts the server down (PINGREQ = type 5 -> 0x50)
+            out.write(new byte[]{0x50, 0x00});
+            out.flush();
+            Frame pong = readFrame(in);
+            if (pong == null || pong.type != PINGRESP) {
+                fail("no PINGRESP after PINGREQ (got " + describe(pong) + ")");
             }
             System.out.println("WIRE_PROBE_CONNECTED");
             System.out.flush();
