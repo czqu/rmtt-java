@@ -1,5 +1,7 @@
 package net.czqu.rmtt.api;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -67,5 +69,15 @@ public final class ConnectionStore {
      */
     public int size() {
         return connections.size();
+    }
+
+    /**
+     * Snapshot of the currently registered connections, safe to iterate while the store changes.
+     * Used by server shutdown to notify every online device.
+     *
+     * @return the registered connections at the time of the call
+     */
+    public List<DeviceConnection> snapshot() {
+        return new ArrayList<>(connections.values());
     }
 }

@@ -3,7 +3,6 @@ package net.czqu.rmtt.codec.netty;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
-import io.netty.handler.codec.DecoderException;
 import net.czqu.rmtt.protocol.FixedHeader;
 import net.czqu.rmtt.protocol.RmttByteReader.Underflow;
 import net.czqu.rmtt.protocol.RmttMessage;
@@ -24,6 +23,12 @@ public class RmttDecoder extends ByteToMessageDecoder {
     private static final InternalLogger LOG = InternalLoggerFactory.getLogger(RmttDecoder.class);
 
     private final int maxBytesInMessage;
+    /**
+     * Set once an oversized frame is seen: the stream is no longer trustworthy, so the remaining
+     * bytes are dropped instead of being re-parsed as RMTT frames (which produced misleading
+     * "unsupported packet type" logs during channel close).
+     */
+    private boolean discarding;
 
     /**
      * Create with the default size cap.
@@ -43,6 +48,10 @@ public class RmttDecoder extends ByteToMessageDecoder {
 
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
+        if (discarding) {
+            in.skipBytes(in.readableBytes());
+            return;
+        }
         if (in.readableBytes() < 1) {
             return;
         }
@@ -56,8 +65,13 @@ public class RmttDecoder extends ByteToMessageDecoder {
             return;
         }
         if (header.remainingLength() < 0 || header.remainingLength() > maxBytesInMessage) {
-            throw new DecoderException("message too large: " + header.remainingLength() + " bytes");
-        }        if (in.readableBytes() < header.remainingLength()) {
+            // the declared frame cannot be honoured: report once, then drop every remaining byte
+            discarding = true;
+            in.skipBytes(in.readableBytes());
+            throw new ProtocolViolation("message too large: " + header.remainingLength()
+                    + " bytes (max " + maxBytesInMessage + ")");
+        }
+        if (in.readableBytes() < header.remainingLength()) {
             in.resetReaderIndex();
             return;
         }

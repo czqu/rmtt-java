@@ -50,6 +50,8 @@ public final class RmttServer {
     private final int wssPort;
     private final SSLContext sslContext;
     private final ServerKeepalivePolicy keepalivePolicy;
+    private final int maxBytesInMessage;
+    private final int maxCredentialLength;
     private final net.czqu.rmtt.api.ConnectionLimiter limiter;
     private final ConcurrentHashMap<AioServerSession, Long> sessions = new ConcurrentHashMap<>();
 
@@ -84,6 +86,25 @@ public final class RmttServer {
                SSLContext sslContext,
                ServerKeepalivePolicy keepalivePolicy,
                int maxConnections) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, port, tlsPort,
+                wsPort, wssPort, sslContext, keepalivePolicy, maxConnections,
+                net.czqu.rmtt.protocol.RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE,
+                net.czqu.rmtt.protocol.RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+    }
+
+    RmttServer(ConnectionStore connectionStore,
+               Authenticator authenticator,
+               RmttMessageHandler messageHandler,
+               ConnectionListener connectionListener,
+               int port,
+               int tlsPort,
+               int wsPort,
+               int wssPort,
+               SSLContext sslContext,
+               ServerKeepalivePolicy keepalivePolicy,
+               int maxConnections,
+               int maxBytesInMessage,
+               int maxCredentialLength) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
@@ -94,6 +115,8 @@ public final class RmttServer {
         this.wssPort = wssPort;
         this.sslContext = sslContext;
         this.keepalivePolicy = keepalivePolicy;
+        this.maxBytesInMessage = maxBytesInMessage;
+        this.maxCredentialLength = maxCredentialLength;
         this.limiter = new net.czqu.rmtt.api.ConnectionLimiter(maxConnections);
     }
 
@@ -115,7 +138,9 @@ public final class RmttServer {
         LOG.info("RMTT server (aio) listening on tcp://0.0.0.0:{} tls://0.0.0.0:{} ws://0.0.0.0:{} wss://0.0.0.0:{}",
                 port, tlsPort, wsPort, wssPort);
         scheduler = Executors.newSingleThreadScheduledExecutor();
-        long checkMillis = Math.max(1000, keepalivePolicy.defaultSeconds() * 1000 / 2);
+        // check often enough relative to the shortest negotiable keepalive so the 1.5x timeout is
+        // enforced with sub-second accuracy instead of a fixed 1s (or coarser) granularity
+        long checkMillis = Math.max(200, keepalivePolicy.minSeconds() * 1000L / 4);
         scheduler.scheduleWithFixedDelay(this::checkHeartbeats, checkMillis, checkMillis, TimeUnit.MILLISECONDS);
     }
 
@@ -155,10 +180,11 @@ public final class RmttServer {
             return;
         }
         AioServerSession session = new AioServerSession(
-                connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy);
+                connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy,
+                maxCredentialLength);
         session.onSessionClosed(() -> dropSession(session));
         AioConnection conn = new AioConnection(ch, false, ws,
-                tls ? () -> serverEngine() : null, session);
+                tls ? () -> serverEngine() : null, session, maxBytesInMessage);
         session.bind(conn);
         sessions.put(session, System.currentTimeMillis());
         conn.start();
@@ -202,8 +228,21 @@ public final class RmttServer {
         }
     }
 
-    /** Close all listeners and connections. */
+    /** Gracefully close all listeners and connections, telling online devices the server is going away. */
     public void closeAll() {
+        for (AioServerSession session : sessions.keySet()) {
+            session.shutdown();
+        }
+        // give the DISCONNECT(0x03) frames a bounded window to flush before the channels die
+        long deadline = System.currentTimeMillis() + 500;
+        while (!sessions.isEmpty() && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
         for (AioServerSession session : sessions.keySet()) {
             session.closed();
         }

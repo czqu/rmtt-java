@@ -89,6 +89,7 @@ public class RmttClient {
     private final boolean kcp;
     private final boolean quic;
     private final QuicSslContext quicSslContext;
+    private final int maxBytesInMessage;
 
     private EventLoopGroup group;
     private Channel channel;
@@ -131,7 +132,8 @@ public class RmttClient {
                float reconnectJitter,
                boolean kcp,
                boolean quic,
-               QuicSslContext quicSslContext) {
+               QuicSslContext quicSslContext,
+               int maxBytesInMessage) {
         this.host = host;
         this.port = port;
         this.credential = credential;
@@ -157,6 +159,7 @@ public class RmttClient {
         this.kcp = kcp;
         this.quic = quic;
         this.quicSslContext = quicSslContext;
+        this.maxBytesInMessage = maxBytesInMessage;
     }
 
     /**
@@ -244,7 +247,7 @@ public class RmttClient {
         config.setNettyBootstrapGroup(new NioEventLoopGroup(), NioDatagramChannel.class);
         kcpClient = new kcp.KcpClient(config);
         KcpClientSession s = new KcpClientSession(credential, keepAliveSeconds,
-                pushHandler, handshakeFuture, events());
+                pushHandler, handshakeFuture, events(), maxBytesInMessage);
         this.session = s;
         kcpClient.connect(new InetSocketAddress(host, port), config, s);
         if (kcpDummy == null) {
@@ -287,7 +290,7 @@ public class RmttClient {
                     .streamHandler(new ChannelInitializer<QuicStreamChannel>() {
                         @Override
                         protected void initChannel(QuicStreamChannel ch) {
-                            ch.pipeline().addLast(new RmttDecoder());
+                            ch.pipeline().addLast(new RmttDecoder(maxBytesInMessage));
                             ch.pipeline().addLast(RmttEncoder.INSTANCE);
                             ClientRmttHandler h = new ClientRmttHandler(credential, connectKeepaliveProposal(),
                                     pushHandler, handshakeFuture, false, events());
@@ -313,7 +316,7 @@ public class RmttClient {
                     new ChannelInitializer<QuicStreamChannel>() {
                         @Override
                         protected void initChannel(QuicStreamChannel ch) {
-                            ch.pipeline().addLast(new RmttDecoder());
+                            ch.pipeline().addLast(new RmttDecoder(maxBytesInMessage));
                             ch.pipeline().addLast(RmttEncoder.INSTANCE);
                             ClientRmttHandler h = new ClientRmttHandler(credential, connectKeepaliveProposal(),
                                     pushHandler, handshakeFuture, false, events());
@@ -359,7 +362,7 @@ public class RmttClient {
     }
 
     private void initTcpPipeline(SocketChannel ch) {
-        ch.pipeline().addLast(new RmttDecoder());
+        ch.pipeline().addLast(new RmttDecoder(maxBytesInMessage));
         ch.pipeline().addLast(RmttEncoder.INSTANCE);
         ClientRmttHandler h = new ClientRmttHandler(credential, connectKeepaliveProposal(),
                 pushHandler, handshakeFuture, webSocket, events());
@@ -374,12 +377,12 @@ public class RmttClient {
         String scheme = secure ? "wss" : "ws";
         WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
                 URI.create(scheme + "://" + host + ":" + port + wsPath),
-                WebSocketVersion.V13, "rmtt", false, HttpHeaders.EMPTY_HEADERS, 65536);
+                WebSocketVersion.V13, "rmtt", false, HttpHeaders.EMPTY_HEADERS, maxBytesInMessage + 16);
         ch.pipeline().addLast(new HttpClientCodec());
         ch.pipeline().addLast(new HttpObjectAggregator(65536));
         ch.pipeline().addLast(new WebSocketClientProtocolHandler(handshaker));
         ch.pipeline().addLast(new WsFrameToByteBuf());
-        ch.pipeline().addLast(new RmttDecoder());
+        ch.pipeline().addLast(new RmttDecoder(maxBytesInMessage));
         ch.pipeline().addLast(new ByteBufToWsFrame());
         ch.pipeline().addLast(RmttEncoder.INSTANCE);
         ClientRmttHandler h = new ClientRmttHandler(credential, connectKeepaliveProposal(),

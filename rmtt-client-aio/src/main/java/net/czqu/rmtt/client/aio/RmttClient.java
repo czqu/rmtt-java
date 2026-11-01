@@ -55,9 +55,10 @@ public final class RmttClient {
     private final long reconnectBaseMillis;
     private final long maxReconnectIntervalMillis;
     private final float reconnectJitter;
+    private final int maxBytesInMessage;
 
-    private final CompletableFuture<ConnectReturnCode> connectFuture = new CompletableFuture<>();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean reconnectScheduled = new AtomicBoolean();
     private volatile AioConnection conn;
     private volatile AioClientSession session;
     private volatile AsynchronousSocketChannel channel;
@@ -89,7 +90,8 @@ public final class RmttClient {
                boolean connectRetry,
                long reconnectBaseMillis,
                long maxReconnectIntervalMillis,
-               float reconnectJitter) {
+               float reconnectJitter,
+               int maxBytesInMessage) {
         this.host = host;
         this.port = port;
         this.credential = credential;
@@ -111,6 +113,7 @@ public final class RmttClient {
         this.reconnectBaseMillis = reconnectBaseMillis;
         this.maxReconnectIntervalMillis = maxReconnectIntervalMillis;
         this.reconnectJitter = reconnectJitter;
+        this.maxBytesInMessage = maxBytesInMessage;
     }
 
     /**
@@ -142,6 +145,9 @@ public final class RmttClient {
         }
         this.channel = ch;
 
+        // one future per attempt: a reconnect must wait for its own CONNACK instead of observing
+        // the already-completed handshake of the previous connection
+        CompletableFuture<ConnectReturnCode> connectFuture = new CompletableFuture<>();
         AioClientSession s = new AioClientSession(credential, connectKeepaliveProposal(), pushHandler, connectFuture,
                 new AioClientSession.SessionEvents() {
                     @Override
@@ -149,6 +155,7 @@ public final class RmttClient {
                         serverKp = kp;
                         connected = code == ConnectReturnCode.CONNECT_ACCEPTED;
                         if (connected) {
+                            reconnectScheduled.set(false);
                             LOG.info("CONNACK code={} serverKp={}s -> {} heartbeat",
                                     code, kp, adaptiveHeartbeat
                                             ? "adaptive (short=" + adaptiveShortSeconds + "s max=" + adaptiveMaxSeconds + "s)"
@@ -168,10 +175,18 @@ public final class RmttClient {
                         onConnectionLost(code == DisconnectReturnCode.NORMAL_DISCONNECT
                                 ? "normal disconnect" : "disconnect " + code);
                     }
+
+                    @Override
+                    public void onClosed(Throwable cause) {
+                        // peer FIN/reset: react immediately instead of waiting for the keepalive
+                        // timeout (which is 1.5x server_kp)
+                        String reason = cause == null ? null : cause.getMessage();
+                        onConnectionLost(reason == null ? "connection closed" : reason);
+                    }
                 });
         this.session = s;
         AioConnection connection = new AioConnection(ch, true, webSocket,
-                tls ? () -> clientEngine() : null, s);
+                tls ? () -> clientEngine() : null, s, maxBytesInMessage);
         s.bind(connection);
         connection.wsHost(host, port);
         this.conn = connection;
@@ -291,6 +306,10 @@ public final class RmttClient {
         if (closed.get() || manuallyDisconnecting) {
             return;
         }
+        if (!connected) {
+            // already reported for this session (DISCONNECT and EOF can both fire)
+            return;
+        }
         connected = false;
         stopAdaptiveHeartbeat();
         stopFixedHeartbeat();
@@ -304,11 +323,15 @@ public final class RmttClient {
     }
 
     private void scheduleReconnect() {
+        if (!reconnectScheduled.compareAndSet(false, true)) {
+            return;
+        }
         if (reconnectBackoff == null) {
             reconnectBackoff = new ReconnectBackoff(reconnectBaseMillis, maxReconnectIntervalMillis, reconnectJitter);
         }
         scheduler.execute(() -> {
             if (closed.get() || manuallyDisconnecting) {
+                reconnectScheduled.set(false);
                 return;
             }
             long delay = reconnectBackoff.nextDelayMillis();
@@ -329,6 +352,8 @@ public final class RmttClient {
             if (connectRetry && !closed.get()) {
                 scheduleReconnect();
             }
+        } finally {
+            reconnectScheduled.set(false);
         }
     }
 

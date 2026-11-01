@@ -53,6 +53,7 @@ final class KcpServerSession implements KcpListener {
     private final ServerKeepalivePolicy keepalivePolicy;
     private final ScheduledExecutorService scheduler;
     private final int maxBytesInMessage;
+    private final int maxCredentialLength;
     private final ConnectionLimiter limiter;
 
     /** A session that has not completed CONNECT within this window is reaped. */
@@ -92,13 +93,28 @@ final class KcpServerSession implements KcpListener {
                      ServerKeepalivePolicy keepalivePolicy,
                      ScheduledExecutorService scheduler,
                      ConnectionLimiter limiter) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy, scheduler,
+                limiter, RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE,
+                RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+    }
+
+    KcpServerSession(ConnectionStore connectionStore,
+                     Authenticator authenticator,
+                     RmttMessageHandler messageHandler,
+                     ConnectionListener connectionListener,
+                     ServerKeepalivePolicy keepalivePolicy,
+                     ScheduledExecutorService scheduler,
+                     ConnectionLimiter limiter,
+                     int maxBytesInMessage,
+                     int maxCredentialLength) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
         this.connectionListener = connectionListener;
         this.keepalivePolicy = keepalivePolicy;
         this.scheduler = scheduler;
-        this.maxBytesInMessage = RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE;
+        this.maxBytesInMessage = maxBytesInMessage;
+        this.maxCredentialLength = maxCredentialLength;
         this.limiter = limiter;
     }
 
@@ -217,9 +233,9 @@ final class KcpServerSession implements KcpListener {
             return;
         }
         byte[] rawCredential = msg.payload();
-        if (rawCredential != null && rawCredential.length > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
+        if (rawCredential != null && rawCredential.length > maxCredentialLength) {
             LOG.warn("CONNECT rejected: credential too long ({} > max {})", rawCredential.length,
-                    RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+                    maxCredentialLength);
             send(s.ukcp, connAck(ConnectReturnCode.CONNECT_UNAUTHORIZED, 0));
             closeSoon(s.ukcp);
             return;

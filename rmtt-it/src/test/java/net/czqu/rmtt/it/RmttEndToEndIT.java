@@ -165,6 +165,56 @@ class RmttEndToEndIT {
         assertArrayEquals("hello-up".getBytes(StandardCharsets.UTF_8), UPSTREAM.get());
     }
 
+    /**
+     * Regression guard for the cross-language report: a frame above the former 8 KiB cap and a
+     * credential above the former 23-byte cap must work like rmtt-go / rmtt-rust, in both
+     * directions.
+     */
+    @Test
+    void largeFramesAndLongCredentialsAreAccepted() throws Exception {
+        AtomicReference<byte[]> upstream = new AtomicReference<>();
+        CountDownLatch upstreamLatch = new CountDownLatch(1);
+        RmttServer own = new RmttServerBuilder()
+                .port(0)
+                .authenticator(AuthResult::allow)
+                .messageHandler((deviceId, payload) -> {
+                    upstream.set(payload);
+                    upstreamLatch.countDown();
+                })
+                .build();
+        ChannelFuture bound = own.awaitStartup();
+        int localPort = ((InetSocketAddress) bound.channel().localAddress()).getPort();
+
+        byte[] big = new byte[1024 * 1024];
+        new java.util.Random(1).nextBytes(big);
+        String longCredential = "abcdefghijklmnopqrstuvwx"; // 24 bytes
+        AtomicReference<byte[]> downstream = new AtomicReference<>();
+        CountDownLatch downstreamLatch = new CountDownLatch(1);
+        RmttClient c = new RmttClientBuilder()
+                .host("127.0.0.1")
+                .port(localPort)
+                .credential(longCredential)
+                .connectTimeoutMillis(3000)
+                .pushHandler(payload -> {
+                    downstream.set(payload);
+                    downstreamLatch.countDown();
+                })
+                .build();
+        try {
+            assertEquals(ConnectReturnCode.CONNECT_ACCEPTED, c.connect(),
+                    "a 24-byte credential must be accepted");
+            c.push(big);
+            assertTrue(upstreamLatch.await(10, TimeUnit.SECONDS), "server should receive the 1 MiB push");
+            assertArrayEquals(big, upstream.get());
+            assertEquals(PushResult.SUCCESS, own.push(longCredential, big));
+            assertTrue(downstreamLatch.await(10, TimeUnit.SECONDS), "client should receive the 1 MiB push");
+            assertArrayEquals(big, downstream.get());
+        } finally {
+            c.shutdown();
+            own.closeAll();
+        }
+    }
+
     @Test
     void downstreamPushReachesClientHandler() throws Exception {
         CountDownLatch down = new CountDownLatch(1);
@@ -360,7 +410,10 @@ class RmttEndToEndIT {
 
             assertEquals(ConnectReturnCode.CONNECT_ACCEPTED, c.connect(), t + " handshake");
             assertTrue(c.isConnected(), t + " connected");
-            assertTrue(srv.isOnline(device), t + " online");
+            // CONNACK is written before the server registers the device, so the client can observe
+            // the handshake result slightly before the route table is updated
+            final RmttServer running = srv;
+            waitFor(() -> running.isOnline(device), t + " online");
 
             // upstream push then downstream push over the same transport
             c.push(("up-" + t.name()).getBytes(StandardCharsets.UTF_8)).awaitUninterruptibly(5000);

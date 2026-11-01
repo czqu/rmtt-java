@@ -35,6 +35,7 @@ public final class AioServerSession implements AioFrameHandler {
     private final RmttMessageHandler messageHandler;
     private final ConnectionListener connectionListener;
     private final ServerKeepalivePolicy keepalivePolicy;
+    private final int maxCredentialLength;
 
     private volatile String deviceId;
     private volatile AioDeviceConnection connection;
@@ -49,11 +50,22 @@ public final class AioServerSession implements AioFrameHandler {
                      RmttMessageHandler messageHandler,
                      ConnectionListener connectionListener,
                      ServerKeepalivePolicy keepalivePolicy) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy,
+                RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+    }
+
+    AioServerSession(ConnectionStore connectionStore,
+                     Authenticator authenticator,
+                     RmttMessageHandler messageHandler,
+                     ConnectionListener connectionListener,
+                     ServerKeepalivePolicy keepalivePolicy,
+                     int maxCredentialLength) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
         this.connectionListener = connectionListener;
         this.keepalivePolicy = keepalivePolicy;
+        this.maxCredentialLength = maxCredentialLength;
     }
 
     /** Effective server-side keepalive for this session (0 = disabled). */
@@ -91,6 +103,22 @@ public final class AioServerSession implements AioFrameHandler {
         }
     }
 
+    /**
+     * Server shutdown: tell the device the server is going away (DISCONNECT 0x03), then close the
+     * connection once that frame has been written.
+     */
+    void shutdown() {
+        AioConnection c = conn;
+        if (c == null) {
+            return;
+        }
+        if (deviceId != null) {
+            c.writeFrame(RmttWireCodec.encodeToBytes(
+                    RmttMessageFactory.disconnect(DisconnectReturnCode.SERVER_SHUTDOWN)));
+        }
+        c.closeAfterFlush();
+    }
+
     @Override
     public synchronized void onMessage(RmttMessage msg) {
         switch (msg.fixedHeader().messageType()) {
@@ -122,9 +150,9 @@ public final class AioServerSession implements AioFrameHandler {
             return;
         }
         byte[] rawCredential = msg.payload();
-        if (rawCredential != null && rawCredential.length > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
+        if (rawCredential != null && rawCredential.length > maxCredentialLength) {
             LOG.warn("CONNECT rejected: credential too long ({} > max {})", rawCredential.length,
-                    RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+                    maxCredentialLength);
             writeConnAck(ConnectReturnCode.CONNECT_UNAUTHORIZED, 0);
             conn.close();
             return;

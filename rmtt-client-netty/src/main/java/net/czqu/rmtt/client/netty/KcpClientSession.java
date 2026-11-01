@@ -17,7 +17,6 @@ import net.czqu.rmtt.protocol.RmttByteReader.Underflow;
 import net.czqu.rmtt.protocol.RmttMessage;
 import net.czqu.rmtt.protocol.RmttMessageFactory;
 import net.czqu.rmtt.protocol.RmttMessageType;
-import net.czqu.rmtt.protocol.RmttProtocol;
 import net.czqu.rmtt.protocol.RmttWireCodec;
 
 import net.czqu.rmtt.logging.InternalLogger;
@@ -54,13 +53,14 @@ class KcpClientSession implements KcpListener, ClientSession {
                      int keepAliveSeconds,
                      RmttPushHandler pushHandler,
                      CompletableFuture<ConnectReturnCode> connectFuture,
-                     ClientRmttHandler.SessionEvents events) {
+                     ClientRmttHandler.SessionEvents events,
+                     int maxBytesInMessage) {
         this.credential = credential;
         this.keepAliveSeconds = keepAliveSeconds;
         this.pushHandler = pushHandler;
         this.connectFuture = connectFuture;
         this.events = events;
-        this.maxBytesInMessage = RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE;
+        this.maxBytesInMessage = maxBytesInMessage;
     }
 
     boolean isSessionActive() {
