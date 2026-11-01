@@ -31,12 +31,7 @@ func main() {
 	opts.AddListener(server.NewTCPListener(":" + port))
 	opts.SetAuthenticator(allowAll{})
 	opts.SetMessageHandler(func(deviceID string, payload []byte) {
-		// keep logs bounded: the 1 MiB regression payload must not flood CI output
-		shown := payload
-		if len(shown) > 64 {
-			shown = append(append([]byte{}, shown[:64]...), []byte(fmt.Sprintf("...(%dB)", len(payload)))...)
-		}
-		fmt.Printf("PUSH_FROM_CLIENT device=%s payload=%s\n", deviceID, shown)
+		fmt.Printf("PUSH_FROM_CLIENT device=%s payload=%s\n", deviceID, payload)
 		if s != nil {
 			if err := s.Push(deviceID, []byte("echo:"+string(payload))); err != nil {
 				fmt.Fprintln(os.Stderr, "echo push failed:", err)

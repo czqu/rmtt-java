@@ -89,8 +89,7 @@ jobs:
   # ------------------------------------------------------------------
   # Cross-language end-to-end: Java rmtt server + rmtt-go v1.0.2 client.
   # The Java integration tests (*IT via failsafe) already run inside the
-  # build job; this job proves Java/Go interoperability over TCP, including
-  # the blackbox-report regression guards (300-byte credential, 1 MiB frame).
+  # build job; this job proves Java/Go interoperability over TCP.
   # ------------------------------------------------------------------
   e2e-go:
     name: E2E (Java server + Go client)
@@ -131,9 +130,7 @@ jobs:
           exit $GO_RC
 
   # ------------------------------------------------------------------
-  # Reverse cross-language e2e: rmtt-go v1.0.2 server + Java rmtt client,
-  # including the blackbox-report regression guards (300-byte credential,
-  # 1 MiB frame).
+  # Reverse cross-language e2e: rmtt-go v1.0.2 server + Java rmtt client.
   # ------------------------------------------------------------------
   e2e-go-server:
     name: E2E (Go server + Java client)

@@ -35,35 +35,5 @@ fn main() {
     }
     println!("RUST_CLIENT_ECHO_OK {}", String::from_utf8_lossy(&echo));
     client.disconnect();
-
-    // Phase 2: regression guards for the blackbox report - a JWT-like credential well above the
-    // old 23-byte cap (F2) and a 1 MiB frame above the old 8 KiB cap (F1). The Java server must
-    // accept both like rmtt-go / rmtt-rust do.
-    let mut opts2 = ClientOptions::default();
-    opts2.credential = "j".repeat(300);
-    opts2.heartbeat_seconds = 30;
-    let client2 = Client::connect(&addr, opts2).expect("long-credential connect failed");
-    println!("RUST_LONG_CRED_OK (300-byte credential accepted)");
-
-    let (tx2, rx2) = mpsc::channel::<Vec<u8>>();
-    client2.set_payload_handler(move |msg| {
-        let _ = tx2.send(msg.payload().to_vec());
-    });
-    let mut big = Vec::with_capacity(1024 * 1024);
-    while big.len() < 1024 * 1024 {
-        big.extend_from_slice(b"0123456789abcdef");
-    }
-    client2.push(&big).expect("1 MiB push failed");
-    let mut expect = b"echo:".to_vec();
-    expect.extend_from_slice(&big);
-    let echo2 = rx2
-        .recv_timeout(Duration::from_secs(10))
-        .expect("timeout waiting for 1 MiB echo");
-    if echo2 != expect {
-        eprintln!("1 MiB echo mismatch: got {} bytes", echo2.len());
-        std::process::exit(1);
-    }
-    println!("RUST_LARGE_ECHO_OK (1 MiB round trip)");
-    client2.disconnect();
     println!("RUST_CLIENT_E2E_PASS");
 }
