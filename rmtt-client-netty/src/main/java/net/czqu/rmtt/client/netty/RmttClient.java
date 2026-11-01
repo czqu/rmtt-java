@@ -245,6 +245,10 @@ public class RmttClient {
         kcp.ChannelConfig config = new kcp.ChannelConfig();
         config.setConv(ThreadLocalRandom.current().nextInt());
         config.setNettyBootstrapGroup(new NioEventLoopGroup(), NioDatagramChannel.class);
+        // larger kcp windows: a single RMTT frame can reach 16 MiB and benefits from a wider
+        // in-flight window (protocol-compatible; the window is advisory in ACK headers)
+        config.setSndwnd(256);
+        config.setRcvwnd(256);
         kcpClient = new kcp.KcpClient(config);
         KcpClientSession s = new KcpClientSession(credential, keepAliveSeconds,
                 pushHandler, handshakeFuture, events(), maxBytesInMessage);

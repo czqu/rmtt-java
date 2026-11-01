@@ -12,7 +12,6 @@ import net.czqu.rmtt.api.ConnectionStore;
 import net.czqu.rmtt.api.DeviceConnection;
 import net.czqu.rmtt.api.RmttMessageHandler;
 import net.czqu.rmtt.codec.netty.ByteBufRmttByteReader;
-import net.czqu.rmtt.codec.netty.ByteBufRmttByteWriter;
 import net.czqu.rmtt.protocol.ConnAckVariableHeader;
 import net.czqu.rmtt.protocol.ConnectMessage;
 import net.czqu.rmtt.protocol.ConnectReturnCode;
@@ -336,10 +335,8 @@ final class KcpServerSession implements KcpListener {
         if (!ukcp.isActive()) {
             return;
         }
-        ByteBuf out = Unpooled.buffer();
-        RmttWireCodec.encode(msg, new ByteBufRmttByteWriter(out));
-        ukcp.write(out);
-        out.release();
+        // chunked write: kcp-base drops a single message above 255 segments
+        KcpDeviceConnection.writeChunked(ukcp, RmttWireCodec.encodeToBytes(msg));
     }
 
     private void closeSoon(Ukcp ukcp) {

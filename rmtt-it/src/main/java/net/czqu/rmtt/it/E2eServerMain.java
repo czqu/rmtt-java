@@ -40,13 +40,23 @@ public final class E2eServerMain {
                 .authenticator(credential -> AuthResult.allow(credential))
                 .messageHandler((deviceId, payload) -> {
                     String text = new String(payload, StandardCharsets.UTF_8);
-                    System.out.println("PUSH_FROM_CLIENT device=" + deviceId + " payload=" + text);
+                    // keep logs bounded: the 1 MiB regression payload must not flood CI output
+                    String shown = text.length() <= 64
+                            ? text : text.substring(0, 64) + "...(" + text.length() + "B)";
+                    System.out.println("PUSH_FROM_CLIENT device=" + deviceId + " payload=" + shown);
                     System.out.flush();
                     serverRef[0].push(deviceId, ("echo:" + text).getBytes(StandardCharsets.UTF_8));
                 })
                 .build();
         serverRef[0] = server;
         server.awaitStartup();
+        // graceful shutdown on SIGTERM/SIGINT: online devices receive DISCONNECT(0x03) before
+        // the connections die, exactly like the blackbox suite's `server.shutdown_code` case
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (serverRef[0] != null) {
+                serverRef[0].closeAll();
+            }
+        }, "e2e-server-shutdown"));
         System.out.println("E2E_SERVER_READY port=" + port);
         System.out.flush();
         // keep the process alive until the CI job kills it
