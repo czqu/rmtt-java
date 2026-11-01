@@ -32,7 +32,7 @@
                  relies on sun.misc internals unavailable on modern JDKs) -->
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.78.1</version>
+            <version>1.84</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
