@@ -10,6 +10,7 @@ import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.util.concurrent.AbstractScheduledEventExecutor;
 import net.czqu.rmtt.api.AuthResult;
 import net.czqu.rmtt.api.PushResult;
+import net.czqu.rmtt.api.RmttMessageHandler;
 import net.czqu.rmtt.client.netty.RmttClient;
 import net.czqu.rmtt.client.netty.RmttClientBuilder;
 import net.czqu.rmtt.client.netty.RmttPushHandler;
@@ -30,11 +31,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.math.BigInteger;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -331,6 +337,128 @@ class RmttEndToEndIT {
         return count;
     }
 
+    /**
+     * Regression guard for the cross-language report (F1): a 1 MiB frame must round-trip over
+     * every transport; the former 8 KiB cap failed every Java combination in the matrix.
+     */
+    @ParameterizedTest
+    @EnumSource(Transport.class)
+    void largeFrameRoundTrip(Transport t) throws Exception {
+        Assumptions.assumeTrue(t != Transport.QUIC || Quic.isAvailable(),
+                "QUIC native library not available on this platform");
+        byte[] big = new byte[1024 * 1024];
+        new java.util.Random(7).nextBytes(big);
+        String device = "e2e-big-" + t.name().toLowerCase();
+        int port = pickPort(t);
+
+        AtomicReference<byte[]> upstream = new AtomicReference<>();
+        CountDownLatch upstreamLatch = new CountDownLatch(1);
+        RmttServer srv = buildServer(t, port, (deviceId, payload) -> {
+            upstream.set(payload);
+            upstreamLatch.countDown();
+        });
+        srv.awaitStartup();
+        AtomicReference<byte[]> down = new AtomicReference<>();
+        CountDownLatch downLatch = new CountDownLatch(1);
+        RmttClient c = buildClient(t, port, device, payload -> {
+            down.set(payload);
+            downLatch.countDown();
+        });
+        try {
+            assertEquals(ConnectReturnCode.CONNECT_ACCEPTED, c.connect(), t + " handshake");
+            c.push(big);
+            assertTrue(upstreamLatch.await(20, TimeUnit.SECONDS), t + " 1 MiB upstream");
+            assertArrayEquals(big, upstream.get(), t + " upstream integrity");
+            assertEquals(PushResult.SUCCESS, srv.push(device, big), t + " downstream push");
+            assertTrue(downLatch.await(20, TimeUnit.SECONDS), t + " 1 MiB downstream");
+            assertArrayEquals(big, down.get(), t + " downstream integrity");
+        } finally {
+            try {
+                c.disconnect();
+            } catch (Exception ignored) {
+                // best-effort cleanup
+            }
+            c.shutdown();
+            srv.closeAll();
+        }
+    }
+
+    /**
+     * Regression guard for the cross-language report (F2): the wire maximum credential length
+     * (65535 bytes) must be accepted; the former 23-byte cap rejected JWT/OAuth style credentials.
+     */
+    @Test
+    void wireMaxCredentialIsAccepted() throws Exception {
+        char[] raw = new char[65535];
+        java.util.Arrays.fill(raw, 'c');
+        RmttClient c = connect(new String(raw), payload -> {
+        });
+        assertTrue(c.isConnected());
+    }
+
+    /**
+     * Regression guard for the cross-language report (F1/F11): a frame declaring more than the
+     * configured maximum must be rejected with DISCONNECT(0x04) and the connection must close
+     * without decoding the residual bytes again (the old code logged a misleading
+     * "unsupported packet type RESERVED" follow-up).
+     */
+    @Test
+    void oversizedDeclaredFrameIsRejectedWithDisconnect04() throws Exception {
+        try (Socket socket = new Socket("127.0.0.1", port)) {
+            socket.setSoTimeout(5000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+            rawConnect(out, "e2e-oversize", 30);
+            WireFrame connack = readFrame(in);
+            assertEquals(2, connack.type, "CONNACK expected");
+
+            // declare 16 MiB + 1 (the default cap is 16 MiB) and send only the header,
+            // mirroring the blackbox `protocol.oversized_length` case
+            ByteArrayOutputStream header = new ByteArrayOutputStream();
+            header.write(0x30);
+            writeVarint(header, 16 * 1024 * 1024 + 1);
+            out.write(header.toByteArray());
+            out.flush();
+
+            WireFrame reply = readFrame(in);
+            assertEquals(14, reply.type, "DISCONNECT expected");
+            assertEquals(0x04, reply.body[0] & 0xFF, "protocol violation code expected");
+            // F11: no follow-up frame may be produced from the residual bytes
+            WireFrame extra = readFrame(in);
+            assertEquals(null, extra, "exactly one frame expected before close");
+        }
+    }
+
+    /**
+     * Regression guard for the cross-language report (F3): graceful shutdown must deliver
+     * DISCONNECT(0x03) to online devices before the TCP connections die.
+     */
+    @Test
+    void shutdownSendsDisconnect03() throws Exception {
+        RmttServer own = new RmttServerBuilder()
+                .port(0)
+                .authenticator(credential -> AuthResult.allow(credential))
+                .messageHandler((deviceId, payload) -> {
+                })
+                .build();
+        ChannelFuture bound = own.awaitStartup();
+        int localPort = ((InetSocketAddress) bound.channel().localAddress()).getPort();
+        try (Socket socket = new Socket("127.0.0.1", localPort)) {
+            socket.setSoTimeout(5000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+            rawConnect(out, "e2e-shutdown", 30);
+            WireFrame connack = readFrame(in);
+            assertEquals(2, connack.type, "CONNACK expected");
+            own.closeAll();
+            WireFrame bye = readFrame(in);
+            assertEquals(14, bye.type, "DISCONNECT expected on shutdown");
+            assertEquals(0x03, bye.body[0] & 0xFF, "SERVER_SHUTDOWN code expected");
+        } finally {
+            own.closeAll();
+        }
+    }
+
     /** Transports exercised by the round-trip test. */
     enum Transport {
         TCP, WS, WSS, KCP, QUIC
@@ -439,13 +567,146 @@ class RmttEndToEndIT {
         }
     }
 
-    private static int freeTcpPort() throws Exception {
+    private static int pickPort(Transport t) throws Exception {
+        return t == Transport.KCP || t == Transport.QUIC ? freeUdpPort() : freeTcpPort();
+    }
+
+    private static RmttServer buildServer(Transport t, int port, RmttMessageHandler handler) {
+        RmttServerBuilder sb = new RmttServerBuilder()
+                .authenticator(credential -> AuthResult.allow(credential))
+                .messageHandler(handler);
+        switch (t) {
+            case TCP:
+                sb.port(port);
+                break;
+            case WS:
+                sb.port(0).wsPort(port);
+                break;
+            case WSS:
+                sb.port(0).wssPort(port).wssSslContext(wssServerCtx);
+                break;
+            case KCP:
+                sb.port(0).kcpPort(port);
+                break;
+            case QUIC:
+                sb.port(0).quicPort(port).quicSslContext(quicServerCtx);
+                break;
+        }
+        return sb.build();
+    }
+
+    private static RmttClient buildClient(Transport t, int port, String credential, RmttPushHandler handler) {
+        RmttClientBuilder cb = new RmttClientBuilder()
+                .host("127.0.0.1")
+                .port(port)
+                .credential(credential)
+                .keepAliveSeconds(30)
+                .connectTimeoutMillis(5000)
+                .pushHandler(handler);
+        switch (t) {
+            case TCP:
+                break;
+            case WS:
+                cb.webSocket(true);
+                break;
+            case WSS:
+                cb.webSocket(true).secure(true).sslContext(wssClientCtx);
+                break;
+            case KCP:
+                cb.kcp(true);
+                break;
+            case QUIC:
+                cb.quic(true).quicSslContext(quicClientCtx);
+                break;
+        }
+        return cb.build();
+    }
+
+    /** One decoded raw wire frame: the fixed-header type nibble plus the frame body. */
+    static final class WireFrame {
+        final int type;
+        final byte[] body;
+
+        WireFrame(int type, byte[] body) {
+            this.type = type;
+            this.body = body;
+        }
+    }
+
+    static void rawConnect(OutputStream out, String credential, int keepalive) throws Exception {
+        byte[] c = credential.getBytes(StandardCharsets.UTF_8);
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        body.write(0x63);
+        body.write(0x7a);
+        body.write(0x71);
+        body.write(0x75);
+        body.write(1); // version
+        body.write(0); // reserve
+        body.write((keepalive >> 8) & 0xFF);
+        body.write(keepalive & 0xFF);
+        body.write((c.length >> 8) & 0xFF);
+        body.write(c.length & 0xFF);
+        body.write(c);
+        ByteArrayOutputStream frame = new ByteArrayOutputStream();
+        frame.write(0x10);
+        writeVarint(frame, body.size());
+        frame.write(body.toByteArray());
+        out.write(frame.toByteArray());
+        out.flush();
+    }
+
+    static void writeVarint(ByteArrayOutputStream out, int value) {
+        int v = value;
+        while (true) {
+            int digit = v % 128;
+            v /= 128;
+            if (v > 0) {
+                digit |= 0x80;
+            }
+            out.write(digit);
+            if (v == 0) {
+                return;
+            }
+        }
+    }
+
+    static WireFrame readFrame(InputStream in) throws Exception {
+        int first = in.read();
+        if (first < 0) {
+            return null;
+        }
+        int mult = 1;
+        int remaining = 0;
+        for (int i = 0; i < 4; i++) {
+            int digit = in.read();
+            if (digit < 0) {
+                throw new EOFException("eof in remaining length");
+            }
+            remaining += (digit & 0x7F) * mult;
+            if ((digit & 0x80) == 0) {
+                break;
+            }
+            mult *= 128;
+        }
+        byte[] body = new byte[Math.max(0, remaining)];
+        int off = 0;
+        while (off < body.length) {
+            int n = in.read(body, off, body.length - off);
+            if (n < 0) {
+                throw new EOFException("eof in body");
+            }
+            off += n;
+        }
+        return new WireFrame((first >> 4) & 0x0F, body);
+    }
+
+    static int freeTcpPort() throws Exception {
         try (ServerSocket s = new ServerSocket(0)) {
             return s.getLocalPort();
         }
     }
 
-    private static int freeUdpPort() throws Exception {
+    static int freeUdpPort() throws Exception {
         try (DatagramSocket s = new DatagramSocket(0)) {
             return s.getLocalPort();
         }

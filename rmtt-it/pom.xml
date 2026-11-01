@@ -23,6 +23,14 @@
             <artifactId>rmtt-client-netty</artifactId>
         </dependency>
         <dependency>
+            <groupId>net.czqu.rmtt</groupId>
+            <artifactId>rmtt-server-aio</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.czqu.rmtt</groupId>
+            <artifactId>rmtt-client-aio</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
