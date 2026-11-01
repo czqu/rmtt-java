@@ -8,6 +8,7 @@ import net.czqu.rmtt.protocol.FixedHeader;
 import net.czqu.rmtt.protocol.RmttMessage;
 import net.czqu.rmtt.protocol.RmttMessageFactory;
 import net.czqu.rmtt.protocol.RmttMessageType;
+import net.czqu.rmtt.protocol.RmttProtocol;
 import net.czqu.rmtt.protocol.RmttWireCodec;
 import net.czqu.rmtt.protocol.RmttWireCodec.BadProtocolVersionViolation;
 import net.czqu.rmtt.protocol.RmttWireCodec.MagicNumberViolation;
@@ -40,11 +41,13 @@ public final class AioConnection {
     private final Supplier<SSLEngine> sslEngineFactory;
     private final AioFrameHandler handler;
 
-    private final AioMessageDecoder frameDecoder = new AioMessageDecoder();
-    private final WsFrameCodec.Decoder wsDecoder = new WsFrameCodec.Decoder();
+    private final AioMessageDecoder frameDecoder;
+    private final WsFrameCodec.Decoder wsDecoder;
     private final ConcurrentLinkedQueue<byte[]> writeQueue = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean writing = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
+    /** Set by {@link #closeAfterFlush()}: close the channel once the write queue drains. */
+    private volatile boolean closeOnFlush;
 
     private final ByteBuffer readBuffer = ByteBuffer.allocateDirect(8192);
     private byte[] preWsBuffer = new byte[2048];
@@ -77,11 +80,33 @@ public final class AioConnection {
                          boolean wsEnabled,
                          Supplier<SSLEngine> sslEngineFactory,
                          AioFrameHandler handler) {
+        this(channel, clientSide, wsEnabled, sslEngineFactory, handler,
+                RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE);
+    }
+
+    /**
+     * Create a connection with an explicit RMTT frame size cap.
+     *
+     * @param channel           the OS channel to multiplex
+     * @param clientSide        true when this is the connecting side (client masks WS frames)
+     * @param wsEnabled         true when frames travel inside a WebSocket binary stream
+     * @param sslEngineFactory  TLS engine supplier, or null for plaintext
+     * @param handler           callback surface for decoded messages and lifecycle events
+     * @param maxBytesInMessage cap on the total size of a single RMTT message
+     */
+    public AioConnection(AsynchronousSocketChannel channel,
+                         boolean clientSide,
+                         boolean wsEnabled,
+                         Supplier<SSLEngine> sslEngineFactory,
+                         AioFrameHandler handler,
+                         int maxBytesInMessage) {
         this.channel = channel;
         this.clientSide = clientSide;
         this.wsEnabled = wsEnabled;
         this.sslEngineFactory = sslEngineFactory;
         this.handler = handler;
+        this.frameDecoder = new AioMessageDecoder(maxBytesInMessage);
+        this.wsDecoder = new WsFrameCodec.Decoder(maxBytesInMessage + 16);
     }
 
     /**
@@ -185,6 +210,8 @@ public final class AioConnection {
             writing.set(false);
             if (!writeQueue.isEmpty()) {
                 flushWrites();
+            } else if (closeOnFlush) {
+                close();
             }
             return;
         }
@@ -574,6 +601,19 @@ public final class AioConnection {
             channel.close();
         } catch (IOException ignored) {
         }
+    }
+
+    /**
+     * Close the connection once all queued frames have been written. Used to make sure a
+     * DISCONNECT sent right before shutdown actually reaches the peer instead of being dropped by
+     * an immediate {@link #close()}.
+     */
+    public void closeAfterFlush() {
+        closeOnFlush = true;
+        if (closed.get()) {
+            return;
+        }
+        flushWrites();
     }
 
     private void fail(Throwable cause) {

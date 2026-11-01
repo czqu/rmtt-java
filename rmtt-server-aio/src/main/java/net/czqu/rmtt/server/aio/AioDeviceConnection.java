@@ -47,8 +47,11 @@ public final class AioDeviceConnection implements DeviceConnection {
     public void sendDisconnect(DisconnectReturnCode code) {
         if (isActive()) {
             conn.writeFrame(RmttWireCodec.encodeToBytes(RmttMessageFactory.disconnect(code)));
+            // close only after the frame has been flushed, otherwise the peer may never see the code
+            conn.closeAfterFlush();
+        } else {
+            conn.close();
         }
-        conn.close();
     }
 
     @Override

@@ -29,6 +29,7 @@ import net.czqu.rmtt.protocol.PushVariableHeader;
 import net.czqu.rmtt.protocol.FixedHeader;
 import net.czqu.rmtt.protocol.RmttMessageFactory;
 import net.czqu.rmtt.protocol.RmttMessageType;
+import net.czqu.rmtt.protocol.RmttProtocol;
 import net.czqu.rmtt.protocol.RmttWireCodec;
 import net.czqu.rmtt.protocol.ServerKeepalivePolicy;
 
@@ -63,6 +64,8 @@ public class RmttServer {
     private final String wsPath;
     private final SslContext wssSslContext;
     private final ServerKeepalivePolicy keepalivePolicy;
+    private final int maxBytesInMessage;
+    private final int maxCredentialLength;
     private final net.czqu.rmtt.api.ConnectionLimiter limiter;
     private final KcpServer kcpServer;
     private final QuicServer quicServer;
@@ -85,7 +88,8 @@ public class RmttServer {
                int quicPort,
                io.netty.handler.codec.quic.QuicSslContext quicSslContext) {
         this(connectionStore, authenticator, messageHandler, connectionListener, port, wsPort,
-                wssPort, wsPath, wssSslContext, keepalivePolicy, kcpPort, quicPort, quicSslContext, 0);
+                wssPort, wsPath, wssSslContext, keepalivePolicy, kcpPort, quicPort, quicSslContext, 0,
+                RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE, RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
     }
 
     RmttServer(ConnectionStore connectionStore,
@@ -102,6 +106,28 @@ public class RmttServer {
                int quicPort,
                io.netty.handler.codec.quic.QuicSslContext quicSslContext,
                int maxConnections) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, port, wsPort,
+                wssPort, wsPath, wssSslContext, keepalivePolicy, kcpPort, quicPort, quicSslContext,
+                maxConnections, RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE,
+                RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+    }
+
+    RmttServer(ConnectionStore connectionStore,
+               Authenticator authenticator,
+               RmttMessageHandler messageHandler,
+               ConnectionListener connectionListener,
+               int port,
+               int wsPort,
+               int wssPort,
+               String wsPath,
+               SslContext wssSslContext,
+               ServerKeepalivePolicy keepalivePolicy,
+               int kcpPort,
+               int quicPort,
+               io.netty.handler.codec.quic.QuicSslContext quicSslContext,
+               int maxConnections,
+               int maxBytesInMessage,
+               int maxCredentialLength) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
@@ -112,12 +138,15 @@ public class RmttServer {
         this.wsPath = wsPath == null || wsPath.isEmpty() ? "/rmtt" : wsPath;
         this.wssSslContext = wssSslContext;
         this.keepalivePolicy = keepalivePolicy;
+        this.maxBytesInMessage = maxBytesInMessage;
+        this.maxCredentialLength = maxCredentialLength;
         this.limiter = new net.czqu.rmtt.api.ConnectionLimiter(maxConnections);
         this.kcpServer = kcpPort > 0 ? new KcpServer(connectionStore, authenticator, messageHandler,
-                connectionListener, keepalivePolicy, kcpPort, limiter) : null;
+                connectionListener, keepalivePolicy, kcpPort, limiter, maxBytesInMessage, maxCredentialLength) : null;
         this.quicServer = quicPort > 0 && quicSslContext != null
                 ? new QuicServer(connectionStore, authenticator, messageHandler,
-                connectionListener, keepalivePolicy, quicPort, quicSslContext, limiter) : null;
+                connectionListener, keepalivePolicy, quicPort, quicSslContext, limiter,
+                maxBytesInMessage, maxCredentialLength) : null;
     }
 
     /**
@@ -168,10 +197,10 @@ public class RmttServer {
         return new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel ch) {
-                ch.pipeline().addLast(new RmttDecoder());
+                ch.pipeline().addLast(new RmttDecoder(maxBytesInMessage));
                 ch.pipeline().addLast(RmttEncoder.INSTANCE);
                 ch.pipeline().addLast(new ServerRmttHandler(connectionStore, authenticator,
-                        messageHandler, connectionListener, keepalivePolicy, limiter));
+                        messageHandler, connectionListener, keepalivePolicy, limiter, maxCredentialLength));
             }
         };
     }
@@ -186,13 +215,14 @@ public class RmttServer {
                 }
                 ch.pipeline().addLast(new HttpServerCodec());
                 ch.pipeline().addLast(new HttpObjectAggregator(65536));
-                ch.pipeline().addLast(new WebSocketServerProtocolHandler(wsPath, "rmtt", false, 65536));
+                ch.pipeline().addLast(new WebSocketServerProtocolHandler(
+                        wsPath, "rmtt", false, maxBytesInMessage + 16));
                 ch.pipeline().addLast(new WsFrameToByteBuf());
-                ch.pipeline().addLast(new RmttDecoder());
+                ch.pipeline().addLast(new RmttDecoder(maxBytesInMessage));
                 ch.pipeline().addLast(new ByteBufToWsFrame());
                 ch.pipeline().addLast(RmttEncoder.INSTANCE);
                 ch.pipeline().addLast(new ServerRmttHandler(connectionStore, authenticator,
-                        messageHandler, connectionListener, keepalivePolicy, limiter));
+                        messageHandler, connectionListener, keepalivePolicy, limiter, maxCredentialLength));
             }
         });
         bootstrap.bind(p).addListener((ChannelFutureListener) f -> {
@@ -213,9 +243,11 @@ public class RmttServer {
     }
 
     /**
-     * Close all bound channels (TCP, WS, KCP, QUIC) and shut down the event loops.
+     * Gracefully close the server: send DISCONNECT(0x03) to every online device, then close all
+     * bound channels (TCP, WS, KCP, QUIC) and shut down the event loops.
      */
     public void closeAll() {
+        notifyShutdown();
         for (Channel c : boundChannels) {
             c.close().awaitUninterruptibly();
         }
@@ -230,6 +262,30 @@ public class RmttServer {
         }
         if (workerGroup != null) {
             workerGroup.shutdownGracefully();
+        }
+    }
+
+    /** Tell every registered device the server is going away (DISCONNECT 0x03). */
+    private void notifyShutdown() {
+        for (net.czqu.rmtt.api.DeviceConnection conn : connectionStore.snapshot()) {
+            try {
+                if (conn.isActive()) {
+                    conn.sendDisconnect(DisconnectReturnCode.SERVER_SHUTDOWN);
+                }
+            } catch (Exception e) {
+                LOG.warn("failed to send DISCONNECT(0x03) during shutdown", e);
+            }
+        }
+        // sendDisconnect() closes the channel after the write is flushed; give those writes a
+        // bounded window to complete so the frames are not lost when the process exits.
+        long deadline = System.currentTimeMillis() + 500;
+        while (connectionStore.size() > 0 && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
     }
 

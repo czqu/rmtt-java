@@ -2,6 +2,8 @@ package net.czqu.rmtt.client.netty;
 
 import io.netty.handler.ssl.SslContext;
 
+import net.czqu.rmtt.protocol.RmttProtocol;
+
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -45,6 +47,7 @@ public final class RmttClientBuilder {
     private boolean kcp = false;
     private boolean quic = false;
     private io.netty.handler.codec.quic.QuicSslContext quicSslContext;
+    private int maxBytesInMessage = RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE;
 
     /**
      * Server host.
@@ -312,6 +315,21 @@ public final class RmttClientBuilder {
     }
 
     /**
+     * Maximum total size of a single RMTT message accepted from the server. Defaults to 16 MiB,
+     * matching rmtt-go / rmtt-rust.
+     *
+     * @param maxBytesInMessage the frame size cap in bytes (&gt; 0)
+     * @return this builder
+     */
+    public RmttClientBuilder maxBytesInMessage(int maxBytesInMessage) {
+        if (maxBytesInMessage <= 0) {
+            throw new IllegalArgumentException("maxBytesInMessage must be > 0");
+        }
+        this.maxBytesInMessage = maxBytesInMessage;
+        return this;
+    }
+
+    /**
      * Validate the configuration and build the client.
      *
      * @return the configured client
@@ -343,6 +361,6 @@ public final class RmttClientBuilder {
                 connectTimeoutMillis, writeTimeoutMillis, pushHandler,
                 webSocket, secure, wsPath, sslContext,
                 autoReconnect, connectRetry, reconnectBaseMillis, maxReconnectIntervalMillis, reconnectJitter,
-                kcp, quic, quicSslContext);
+                kcp, quic, quicSslContext, maxBytesInMessage);
     }
 }

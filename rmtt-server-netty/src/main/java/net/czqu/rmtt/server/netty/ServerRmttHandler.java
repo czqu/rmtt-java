@@ -57,6 +57,7 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
     private final ConnectionListener connectionListener;
     private final ServerKeepalivePolicy keepalivePolicy;
     private final ConnectionLimiter limiter;
+    private final int maxCredentialLength;
     private boolean limitAcquired;
 
     /**
@@ -93,12 +94,35 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
                              ConnectionListener connectionListener,
                              ServerKeepalivePolicy keepalivePolicy,
                              ConnectionLimiter limiter) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy, limiter,
+                RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+    }
+
+    /**
+     * Create the handler with an explicit CONNECT credential length cap.
+     *
+     * @param connectionStore     shared route table
+     * @param authenticator       CONNECT authentication policy
+     * @param messageHandler      upstream PUSH dispatch
+     * @param connectionListener  lifecycle callbacks
+     * @param keepalivePolicy     keepalive negotiation policy
+     * @param limiter             shared connection admission limiter
+     * @param maxCredentialLength maximum accepted credential length in bytes
+     */
+    public ServerRmttHandler(ConnectionStore connectionStore,
+                             Authenticator authenticator,
+                             RmttMessageHandler messageHandler,
+                             ConnectionListener connectionListener,
+                             ServerKeepalivePolicy keepalivePolicy,
+                             ConnectionLimiter limiter,
+                             int maxCredentialLength) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
         this.connectionListener = connectionListener;
         this.keepalivePolicy = keepalivePolicy;
         this.limiter = limiter;
+        this.maxCredentialLength = maxCredentialLength;
     }
 
     @Override
@@ -169,9 +193,9 @@ public class ServerRmttHandler extends SimpleChannelInboundHandler<RmttMessage> 
             return;
         }
         byte[] rawCredential = msg instanceof ConnectMessage ? ((ConnectMessage) msg).payload() : null;
-        if (rawCredential != null && rawCredential.length > RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH) {
+        if (rawCredential != null && rawCredential.length > maxCredentialLength) {
             LOG.warn("CONNECT rejected: credential too long ({} > max {})", rawCredential.length,
-                    RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+                    maxCredentialLength);
             ctx.writeAndFlush(connAck(ConnectReturnCode.CONNECT_UNAUTHORIZED, 0))
                     .addListener(ChannelFutureListener.CLOSE);
             return;
