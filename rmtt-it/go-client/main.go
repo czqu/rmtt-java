@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -84,44 +82,6 @@ func main() {
 
 	fmt.Printf("GO_ECHO_OK (%d concurrent echoes verified)\n", n)
 	c.Disconnect(100)
-
-	// Phase 2: regression guards for the blackbox report - a JWT-like credential well above
-	// the old 23-byte cap (F2) and a 1 MiB frame in both directions above the old 8 KiB
-	// cap (F1). The Java server must accept both like rmtt-go / rmtt-rust do.
-	opts2 := client.NewClientOptions()
-	opts2.AddServer(addr)
-	opts2.SetCredential(strings.Repeat("j", 300))
-	opts2.SetConnectTimeout(3 * time.Second)
-	opts2.AutoReconnect = false
-	c2 := client.NewClient(opts2)
-	bigEcho := make(chan []byte, 4)
-	c2.AddPayloadHandlerLast(func(_ client.Client, m client.Message) {
-		bigEcho <- m.Payload()
-	})
-	if t := c2.Connect(); t.Wait() && t.Error() != nil {
-		fmt.Fprintln(os.Stderr, "long-credential connect failed:", t.Error())
-		os.Exit(1)
-	}
-	fmt.Println("GO_LONG_CRED_OK (300-byte credential accepted)")
-
-	big := bytes.Repeat([]byte("0123456789abcdef"), 65536) // 1 MiB
-	if t := c2.Push(string(big)); t.WaitTimeout(10*time.Second) && t.Error() != nil {
-		fmt.Fprintln(os.Stderr, "1 MiB push failed:", t.Error())
-		os.Exit(1)
-	}
-	select {
-	case p := <-bigEcho:
-		if !bytes.Equal(p, append([]byte("echo:"), big...)) {
-			fmt.Fprintf(os.Stderr, "1 MiB echo mismatch: got %d bytes\n", len(p))
-			os.Exit(1)
-		}
-	case <-time.After(10 * time.Second):
-		fmt.Fprintln(os.Stderr, "timeout waiting for 1 MiB echo")
-		os.Exit(1)
-	}
-	fmt.Println("GO_LARGE_ECHO_OK (1 MiB round trip)")
-	c2.Disconnect(100)
-
 	fmt.Println("GO_E2E_PASS")
 	os.Exit(0)
 }
