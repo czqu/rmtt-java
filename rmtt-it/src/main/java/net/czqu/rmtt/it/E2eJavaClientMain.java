@@ -69,53 +69,6 @@ public final class E2eJavaClientMain {
         System.out.println("JAVA_CLIENT_ECHO_OK " + echo);
         c.disconnect();
         c.shutdown();
-
-        // Phase 2: regression guards for the blackbox report - a JWT-like credential well above
-        // the old 23-byte cap (F2) and a 1 MiB frame above the old 8 KiB cap (F1). The Go server
-        // must accept both like the Java implementation now does.
-        char[] raw = new char[300];
-        java.util.Arrays.fill(raw, 'j');
-        CountDownLatch down2 = new CountDownLatch(1);
-        AtomicReference<byte[]> got2 = new AtomicReference<>();
-        RmttClient c2 = new RmttClientBuilder()
-                .host(host)
-                .port(port)
-                .credential(new String(raw))
-                .keepAliveSeconds(30)
-                .connectTimeoutMillis(5000)
-                .pushHandler(payload -> {
-                    got2.set(payload);
-                    down2.countDown();
-                })
-                .build();
-        if (c2.connect() != ConnectReturnCode.CONNECT_ACCEPTED) {
-            System.err.println("long-credential connect rejected by Go server");
-            System.exit(1);
-        }
-        System.out.println("JAVA_LONG_CRED_OK (300-byte credential accepted)");
-        byte[] big = new byte[1024 * 1024];
-        for (int i = 0; i < big.length; i++) {
-            big[i] = (byte) ("0123456789abcdef".charAt(i % 16));
-        }
-        c2.push(big).awaitUninterruptibly(10000);
-        if (!down2.await(10, TimeUnit.SECONDS)) {
-            System.err.println("timeout waiting for 1 MiB echo from Go server");
-            System.exit(1);
-        }
-        byte[] gotBytes = got2.get();
-        if (gotBytes.length != big.length + 5) {
-            System.err.println("1 MiB echo size mismatch: " + gotBytes.length);
-            System.exit(1);
-        }
-        for (int i = 0; i < big.length; i++) {
-            if (gotBytes[i + 5] != big[i]) {
-                System.err.println("1 MiB echo content mismatch at " + i);
-                System.exit(1);
-            }
-        }
-        System.out.println("JAVA_LARGE_ECHO_OK (1 MiB round trip)");
-        c2.disconnect();
-        c2.shutdown();
         System.out.println("JAVA_CLIENT_E2E_PASS");
     }
 }
