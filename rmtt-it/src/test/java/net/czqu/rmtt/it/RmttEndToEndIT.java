@@ -431,6 +431,31 @@ class RmttEndToEndIT {
     }
 
     /**
+     * Regression guard: a remaining-length varint with 4 continuation bytes can never terminate
+     * and must be reported as a protocol violation (DISCONNECT 0x04), never mislabelled as an
+     * oversized frame or silently resynced.
+     */
+    @Test
+    void malformedRemainingLengthIsRejectedWithDisconnect04() throws Exception {
+        try (Socket socket = new Socket("127.0.0.1", port)) {
+            socket.setSoTimeout(5000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+            rawConnect(out, "e2e-badvarint", 30);
+            WireFrame connack = readFrame(in);
+            assertEquals(2, connack.type, "CONNACK expected");
+            out.write(new byte[]{0x30, (byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80});
+            out.flush();
+            WireFrame reply = readFrame(in);
+            assertNotNull(reply, "DISCONNECT expected");
+            assertEquals(14, reply.type, "DISCONNECT expected");
+            assertEquals(0x04, reply.body[0] & 0xFF, "protocol violation code expected");
+            WireFrame extra = readFrame(in);
+            assertEquals(null, extra, "exactly one frame expected before close");
+        }
+    }
+
+    /**
      * Regression guard for the cross-language report (F3): graceful shutdown must deliver
      * DISCONNECT(0x03) to online devices before the TCP connections die.
      */

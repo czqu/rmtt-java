@@ -163,7 +163,7 @@ final class KcpServerSession implements KcpListener {
                     protocolViolation(s, "bad header: " + pv.getMessage());
                     break;
                 }
-                if (header.remainingLength() < 0 || header.remainingLength() > maxBytesInMessage) {
+                if (header.remainingLength() > maxBytesInMessage) {
                     s.pending.resetReaderIndex();
                     protocolViolation(s, "message too large: " + header.remainingLength() + " bytes");
                     break;
