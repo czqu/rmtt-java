@@ -142,6 +142,9 @@ class RmttEndToEndIT {
         ConnectReturnCode code = c.connect();
         assertEquals(ConnectReturnCode.CONNECT_ACCEPTED, code, "handshake should be accepted");
         clients.add(c);
+        // CONNACK is written before the server registers the device, so the client can observe
+        // the handshake result slightly before the route table is updated
+        waitFor(() -> server.isOnline(credential), credential + " to be registered");
         return c;
     }
 
