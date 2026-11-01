@@ -49,3 +49,6 @@ dependency-reduced-pom.xml
 
 ### Maven flatten ###
 .flattened-pom.xml
+
+### Uploaded test artifacts (never commit) ###
+.uploads/
