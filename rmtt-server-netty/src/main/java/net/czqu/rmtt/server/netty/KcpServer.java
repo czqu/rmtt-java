@@ -63,6 +63,20 @@ public final class KcpServer {
               ServerKeepalivePolicy keepalivePolicy,
               int port,
               net.czqu.rmtt.api.ConnectionLimiter limiter) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy,
+                port, limiter, net.czqu.rmtt.protocol.RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE,
+                net.czqu.rmtt.protocol.RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+    }
+
+    KcpServer(ConnectionStore connectionStore,
+              Authenticator authenticator,
+              RmttMessageHandler messageHandler,
+              ConnectionListener connectionListener,
+              ServerKeepalivePolicy keepalivePolicy,
+              int port,
+              net.czqu.rmtt.api.ConnectionLimiter limiter,
+              int maxBytesInMessage,
+              int maxCredentialLength) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
@@ -75,7 +89,7 @@ public final class KcpServer {
             return t;
         });
         this.sessionListener = new KcpServerSession(connectionStore, authenticator, messageHandler,
-                connectionListener, keepalivePolicy, scheduler, limiter);
+                connectionListener, keepalivePolicy, scheduler, limiter, maxBytesInMessage, maxCredentialLength);
     }
 
     /** Bind the KCP listener (synchronous). */

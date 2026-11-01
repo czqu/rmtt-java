@@ -7,6 +7,7 @@ import net.czqu.rmtt.api.RmttMessageHandler;
 
 import javax.net.ssl.SSLContext;
 
+import net.czqu.rmtt.protocol.RmttProtocol;
 import net.czqu.rmtt.protocol.ServerKeepalivePolicy;
 
 /**
@@ -33,6 +34,8 @@ public final class RmttServerBuilder {
     private SSLContext sslContext;
     private ServerKeepalivePolicy keepalivePolicy = ServerKeepalivePolicy.defaults();
     private int maxConnections = 10_000;
+    private int maxBytesInMessage = RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE;
+    private int maxCredentialLength = RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH;
 
     /**
      * Required. The application-injected authentication policy (JWT / plain id / user-pass / ...).
@@ -161,6 +164,37 @@ public final class RmttServerBuilder {
     }
 
     /**
+     * Maximum total size of a single RMTT message. Frames declaring more are rejected. Defaults to
+     * 16 MiB, matching rmtt-go / rmtt-rust.
+     *
+     * @param maxBytesInMessage the frame size cap in bytes (&gt; 0)
+     * @return this builder
+     */
+    public RmttServerBuilder maxBytesInMessage(int maxBytesInMessage) {
+        if (maxBytesInMessage <= 0) {
+            throw new IllegalArgumentException("maxBytesInMessage must be > 0");
+        }
+        this.maxBytesInMessage = maxBytesInMessage;
+        return this;
+    }
+
+    /**
+     * Maximum accepted CONNECT credential length. Longer credentials are rejected with CONNACK
+     * 0x03. Defaults to 65535 (the wire maximum), matching rmtt-go / rmtt-rust.
+     *
+     * @param maxCredentialLength the credential size cap in bytes (&gt; 0)
+     * @return this builder
+     */
+    public RmttServerBuilder maxCredentialLength(int maxCredentialLength) {
+        if (maxCredentialLength <= 0 || maxCredentialLength > RmttProtocol.MAX_CREDENTIAL_LENGTH) {
+            throw new IllegalArgumentException("maxCredentialLength must be in [1, "
+                    + RmttProtocol.MAX_CREDENTIAL_LENGTH + "]");
+        }
+        this.maxCredentialLength = maxCredentialLength;
+        return this;
+    }
+
+    /**
      * Validate the configuration and build the server.
      *
      * @return the configured server
@@ -178,6 +212,7 @@ public final class RmttServerBuilder {
                     "tlsPort/wssPort require a caller-provided SSLContext via sslContext(...)");
         }
         return new RmttServer(connectionStore, authenticator, messageHandler,
-                connectionListener, port, tlsPort, wsPort, wssPort, sslContext, keepalivePolicy, maxConnections);
+                connectionListener, port, tlsPort, wsPort, wssPort, sslContext, keepalivePolicy,
+                maxConnections, maxBytesInMessage, maxCredentialLength);
     }
 }

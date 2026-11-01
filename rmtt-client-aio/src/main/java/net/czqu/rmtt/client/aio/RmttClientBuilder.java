@@ -2,6 +2,8 @@ package net.czqu.rmtt.client.aio;
 
 import javax.net.ssl.SSLContext;
 
+import net.czqu.rmtt.protocol.RmttProtocol;
+
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -36,6 +38,7 @@ public final class RmttClientBuilder {
     private long reconnectBaseMillis = 1000;
     private long maxReconnectIntervalMillis = TimeUnit.MINUTES.toMillis(10);
     private float reconnectJitter = 0.25f;
+    private int maxBytesInMessage = RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE;
 
     /**
      * Server host.
@@ -259,6 +262,21 @@ public final class RmttClientBuilder {
     }
 
     /**
+     * Maximum total size of a single RMTT message accepted from the server. Defaults to 16 MiB,
+     * matching rmtt-go / rmtt-rust.
+     *
+     * @param maxBytesInMessage the frame size cap in bytes (&gt; 0)
+     * @return this builder
+     */
+    public RmttClientBuilder maxBytesInMessage(int maxBytesInMessage) {
+        if (maxBytesInMessage <= 0) {
+            throw new IllegalArgumentException("maxBytesInMessage must be > 0");
+        }
+        this.maxBytesInMessage = maxBytesInMessage;
+        return this;
+    }
+
+    /**
      * Validate the configuration and build the client.
      *
      * @return the configured client
@@ -274,6 +292,7 @@ public final class RmttClientBuilder {
         return new RmttClient(host, port, credential, keepAliveSeconds, adaptiveHeartbeat,
                 adaptiveShortSeconds, adaptiveMaxSeconds, probeCount, responseWindowMillis, fineStepSeconds,
                 connectTimeoutMillis, pushHandler, tls, webSocket, wsPath, sslContext,
-                autoReconnect, connectRetry, reconnectBaseMillis, maxReconnectIntervalMillis, reconnectJitter);
+                autoReconnect, connectRetry, reconnectBaseMillis, maxReconnectIntervalMillis, reconnectJitter,
+                maxBytesInMessage);
     }
 }

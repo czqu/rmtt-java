@@ -8,10 +8,12 @@ public final class RmttProtocol {
     public static final int PROTOCOL_VERSION = 1;
     /** Earliest protocol version a server accepts. */
     public static final int PROTOCOL_MIN_VERSION = 1;
-    /** Default cap on the total size of a single message. */
-    public static final int DEFAULT_MAX_BYTES_IN_MESSAGE = 8192;
-    /** Default cap on the CONNECT credential length. */
-    public static final int DEFAULT_MAX_CREDENTIAL_LENGTH = 23;
+    /** Default cap on the total size of a single message (16 MiB, aligned with rmtt-go / rmtt-rust). */
+    public static final int DEFAULT_MAX_BYTES_IN_MESSAGE = 16 * 1024 * 1024;
+    /** Maximum credential length representable on the wire (2-byte length prefix). */
+    public static final int MAX_CREDENTIAL_LENGTH = 0xFFFF;
+    /** Default cap on the CONNECT credential length (the wire maximum, aligned with rmtt-go / rmtt-rust). */
+    public static final int DEFAULT_MAX_CREDENTIAL_LENGTH = MAX_CREDENTIAL_LENGTH;
 
     private RmttProtocol() {
     }

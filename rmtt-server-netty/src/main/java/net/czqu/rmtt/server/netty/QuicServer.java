@@ -44,6 +44,8 @@ public final class QuicServer {
     private final int port;
     private final QuicSslContext sslContext;
     private final ConnectionLimiter limiter;
+    private final int maxBytesInMessage;
+    private final int maxCredentialLength;
 
     private EventLoopGroup group;
     private Channel channel;
@@ -67,6 +69,21 @@ public final class QuicServer {
                int port,
                QuicSslContext sslContext,
                ConnectionLimiter limiter) {
+        this(connectionStore, authenticator, messageHandler, connectionListener, keepalivePolicy,
+                port, sslContext, limiter, net.czqu.rmtt.protocol.RmttProtocol.DEFAULT_MAX_BYTES_IN_MESSAGE,
+                net.czqu.rmtt.protocol.RmttProtocol.DEFAULT_MAX_CREDENTIAL_LENGTH);
+    }
+
+    QuicServer(ConnectionStore connectionStore,
+               Authenticator authenticator,
+               RmttMessageHandler messageHandler,
+               ConnectionListener connectionListener,
+               ServerKeepalivePolicy keepalivePolicy,
+               int port,
+               QuicSslContext sslContext,
+               ConnectionLimiter limiter,
+               int maxBytesInMessage,
+               int maxCredentialLength) {
         this.connectionStore = connectionStore;
         this.authenticator = authenticator;
         this.messageHandler = messageHandler;
@@ -74,6 +91,8 @@ public final class QuicServer {
         this.keepalivePolicy = keepalivePolicy;
         this.port = port;
         this.sslContext = sslContext;
+        this.maxBytesInMessage = maxBytesInMessage;
+        this.maxCredentialLength = maxCredentialLength;
         this.limiter = limiter;
     }
 
@@ -93,10 +112,11 @@ public final class QuicServer {
                 .streamHandler(new ChannelInitializer<QuicStreamChannel>() {
                     @Override
                     protected void initChannel(QuicStreamChannel ch) {
-                        ch.pipeline().addLast(new RmttDecoder());
+                        ch.pipeline().addLast(new RmttDecoder(maxBytesInMessage));
                         ch.pipeline().addLast(RmttEncoder.INSTANCE);
                         ch.pipeline().addLast(new ServerRmttHandler(connectionStore, authenticator,
-                                messageHandler, connectionListener, keepalivePolicy, limiter));
+                                messageHandler, connectionListener, keepalivePolicy, limiter,
+                                maxCredentialLength));
                     }
                 })
                 .build();

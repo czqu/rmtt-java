@@ -40,6 +40,10 @@ final class AioClientSession implements AioFrameHandler {
     interface SessionEvents {
         void onConnAck(ConnectReturnCode code, int serverKp);
         void onDisconnect(DisconnectReturnCode code);
+
+        /** The transport closed without an RMTT DISCONNECT (peer FIN, reset, TLS close, ...). */
+        default void onClosed(Throwable cause) {
+        }
     }
 
     AioClientSession(String credential,
@@ -140,6 +144,9 @@ final class AioClientSession implements AioFrameHandler {
         if (!connectFuture.isDone()) {
             connectFuture.completeExceptionally(cause == null
                     ? new java.io.IOException("connection closed") : cause);
+        }
+        if (events != null) {
+            events.onClosed(cause);
         }
     }
 }
